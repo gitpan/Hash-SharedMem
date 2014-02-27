@@ -1,0 +1,36 @@
+NAME
+
+Hash::SharedMem - efficient shared mutable hash
+
+DESCRIPTION
+
+This module provides a facility for efficiently sharing mutable data
+between processes on one host.  Data is organised as a key/value store,
+resembling a Perl hash.  The keys and values are restricted to octet
+(Latin-1) strings.
+
+The data is represented in files that are mapped into each process's
+memory space, which for interprocess communication amounts to the
+processes sharing memory.  Processes are never blocked waiting for each
+other.  The use of files means that there is some persistence, with the
+data continuing to exist when there are no processes with it mapped.
+
+INSTALLATION
+
+	perl Build.PL
+	./Build
+	./Build test
+	./Build install
+
+AUTHOR
+
+Andrew Main (Zefram) <zefram@fysh.org>
+
+COPYRIGHT
+
+Copyright (C) 2014 PhotoBox Ltd
+
+LICENSE
+
+This module is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
