@@ -9,5 +9,13 @@
 /Makefile.PL
 /SIGNATURE
 /Hash-SharedMem-*
+/lib/Hash/callchecker0.h
+/lib/Hash/conftest?.c
+/lib/Hash/conftest?.o
+/lib/Hash/conftest??.c
+/lib/Hash/conftest??.o
+/lib/Hash/conftest?
+/lib/Hash/conftest??
+/lib/Hash/features
 /lib/Hash/SharedMem.c
 /lib/Hash/SharedMem.o

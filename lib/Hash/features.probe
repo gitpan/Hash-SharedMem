@@ -1,0 +1,127 @@
+my $testnum = 0;
+
+my $compile_ok = sub {
+	my($builder, $hdrs, $code, $link_ctl) = @_;
+	use IO::File;
+	my $conftest_base = $builder->localize_file_path(
+				"lib/Hash/conftest$testnum");
+	my $conftest_file = $builder->localize_file_path(
+				"lib/Hash/conftest$testnum.c");
+	$testnum++;
+	$builder->add_to_cleanup($conftest_file);
+	my $src_fh = IO::File->new($conftest_file, "w")
+		or die "can't write $conftest_file: $!";
+	$src_fh->printflush("#include \"EXTERN.h\"\n".
+			"#include \"perl.h\"\n".
+			"#include \"XSUB.h\"\n".
+			join("", map { "#include <$_>\n" } @$hdrs).
+			"int main(void) {$code}\n")
+		or die "can't write $conftest_file: $!";
+	$src_fh = undef;
+	return eval {
+		my $obj_file = $builder->compile_c($conftest_file,
+					no_feature_defs => 1);
+		my $cbuilder = $builder->cbuilder;
+		if($link_ctl) {
+			$builder->add_to_cleanup(
+				$cbuilder->exe_file($obj_file));
+			$cbuilder->link_executable(
+				objects => $obj_file,
+				extra_linker_flags => [
+					@{$builder->extra_linker_flags || []},
+					(exists($link_ctl->{extra}) ?
+						@{$link_ctl->{extra}} : ()),
+				],
+			);
+		}
+		1;
+	} || 0;
+};
+
+sub {
+	my($builder) = @_;
+	my %defs;
+	my @libs;
+	$compile_ok->($builder, ["stdio.h"], q{
+		char buf[5];
+		return sprintf(buf, "%d", 0) + 1;
+	}, {}) or die "probe system failed: can't compile innocuous program";
+	$compile_ok->($builder, [], q{
+		extern int HLBNzorFAJMYbPEjiEKkMFBaKqZMkqq(void);
+		return HLBNzorFAJMYbPEjiEKkMFBaKqZMkqq() + 1;
+	}, {}) and die "probe system failed: non-existent function usable";
+	$defs{QHAVE_GETPAGESIZE} = $compile_ok->($builder, [], q{
+		int res;
+		res = getpagesize();
+		return res;
+	}, {});
+	$defs{QHAVE_SYSCONF} = $compile_ok->($builder, [], q{
+		int res;
+		res = sysconf(0);
+		return res;
+	}, {});
+	$defs{QHAVE_PATHCONF} = $compile_ok->($builder, [], q{
+		int res;
+		res = pathconf("/", 0);
+		return res;
+	}, {});
+	$defs{QHAVE_CLOCK_GETTIME} = $compile_ok->($builder, [], q{
+		struct timespec ts;
+		int res;
+		res = clock_gettime(CLOCK_REALTIME, &ts);
+		return res;
+	}, {});
+	if(!$defs{QHAVE_CLOCK_GETTIME} &&
+			$compile_ok->($builder, [], q{
+				struct timespec ts;
+				int res;
+				res = clock_gettime(CLOCK_REALTIME, &ts);
+				return res;
+			}, {extra=>["-lrt"]})) {
+		push @libs, "-lrt";
+		$defs{QHAVE_CLOCK_GETTIME} = 1;
+	}
+	$defs{QHAVE_GETTIMEOFDAY} = $compile_ok->($builder, [], q{
+		struct timeval tv;
+		int res;
+		res = gettimeofday(&tv, NULL);
+		return res;
+	}, {});
+	$defs{QHAVE_OPENAT} = $compile_ok->($builder, [], q{
+		int res;
+		res = openat(0, ".", 0, 0);
+		return res;
+	}, {});
+	$defs{QHAVE_FSTATAT} = $compile_ok->($builder, [], q{
+		struct stat st;
+		int res;
+		res = fstatat(0, ".", &st, 0);
+		return res;
+	}, {});
+	$defs{QHAVE_LINKAT} = $compile_ok->($builder, [], q{
+		int res;
+		res = linkat(0, ".", 0, ".", 0);
+		return res;
+	}, {});
+	$defs{QHAVE_UNLINKAT} = $compile_ok->($builder, [], q{
+		int res;
+		res = unlinkat(0, ".", 0);
+		return res;
+	}, {});
+	$defs{QHAVE_FDOPENDIR} = $compile_ok->($builder, [], q{
+		DIR *dirh;
+		dirh = fdopendir(0);
+		return !dirh;
+	}, {});
+	$defs{QHAVE_REALPATH} = $compile_ok->($builder, [], q{
+		char *res, buf[4096];
+		res = realpath(".", buf);
+		return !res;
+	}, {});
+	$defs{QHAVE_GETCWD} = $compile_ok->($builder, [], q{
+		char *res, buf[4096];
+		res = getcwd(buf, sizeof(buf));
+		return !res;
+	}, {});
+	return { defs => \%defs, libs => \@libs };
+}

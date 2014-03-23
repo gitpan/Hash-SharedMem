@@ -12,10 +12,12 @@ ok $sh;
 ok is_shash($sh);
 my %ph;
 
+sub doru($) { defined($_[0]) ? $_[0] : "u" }
+
 sub check_hash_state() {
 	my $ok = 1;
 	for(my $v = 0; $v != 100000; $v++) {
-		$ok &&= (shash_get($sh, $v) // "u") eq ($ph{$v} // "u");
+		$ok &&= doru(shash_get($sh, $v)) eq doru($ph{$v});
 	}
 	ok $ok;
 }

@@ -16,31 +16,39 @@
    "prereqs" : {
       "build" : {
          "requires" : {
+            "Data::Dumper" : "0",
             "Errno" : "1.00",
             "ExtUtils::CBuilder" : "0.15",
             "File::Temp" : "0.22",
+            "IO::File" : "0",
             "Module::Build" : "0",
             "POSIX" : "0",
+            "Scalar::String" : "0",
             "Test::More" : "0",
-            "perl" : "5.014",
+            "if" : "0",
+            "perl" : "5.006",
             "strict" : "0",
+            "utf8" : "0",
             "warnings" : "0"
          }
       },
       "configure" : {
          "requires" : {
             "Module::Build" : "0",
-            "perl" : "5.014",
+            "perl" : "5.006",
             "strict" : "0",
             "warnings" : "0"
          }
       },
       "runtime" : {
+         "recommends" : {
+            "Devel::CallChecker" : "0.003"
+         },
          "requires" : {
             "Exporter" : "0",
             "XSLoader" : "0",
             "parent" : "0",
-            "perl" : "5.014",
+            "perl" : "5.006",
             "strict" : "0",
             "warnings" : "0"
          }
@@ -48,10 +56,12 @@
    },
    "provides" : {
       "Hash::SharedMem" : {
-         "file" : "lib/Hash/SharedMem.pm"
+         "file" : "lib/Hash/SharedMem.pm",
+         "version" : "0.001"
       },
       "Hash::SharedMem::Handle" : {
-         "file" : "lib/Hash/SharedMem/Handle.pm"
+         "file" : "lib/Hash/SharedMem/Handle.pm",
+         "version" : "0.001"
       }
    },
    "release_status" : "stable",
@@ -60,5 +70,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.000"
+   "version" : "0.001"
 }

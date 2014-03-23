@@ -12,10 +12,12 @@ ok $sh;
 ok is_shash($sh);
 my %ph;
 
+sub doru($) { defined($_[0]) ? $_[0] : "u" }
+
 sub check_hash_state() {
 	my $ok = 1;
 	foreach my $k (sort keys %ph) {
-		$ok &&= (shash_get($sh, $k) // "u") eq $ph{$k};
+		$ok &&= doru(shash_get($sh, $k)) eq $ph{$k};
 	}
 	ok $ok;
 }

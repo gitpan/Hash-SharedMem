@@ -130,26 +130,24 @@ A string (key or value) is represented as a structure consisting of a word
 count of bytes in the string, immediately followed by the string's bytes,
 followed by a NUL byte.  (The terminating NUL is not part of the string,
 but included to satisfy Perl's requirements for an SV buffer, so that an
-SV can be constructed to represent the string without needing to copy
-the string.)  The string can contain octets of any value, including
-NUL; the explicit length is the canonical way to determine where the
-string ends.  A string in the data file cannot contain anything that's
-not an octet (or, via Perl's aliasing, a Latin-1 character).  (FUTURE:
-should support full Unicode strings, while retaining space efficiency
-for the common case of octet strings.)
+SV can be constructed to represent the string without needing to copy the
+string.)  The string can contain octets of any value, including NUL; the
+explicit length is the canonical way to determine where the string ends.
+A string in the data file cannot contain anything that's not an octet
+(or, via Perl's aliasing, a Latin-1 character).
 
-A collection of keys and values is represented as a btree, in which the
-keys are sorted lexicographically.  The maximum number of entries in
-a btree node is a parameter to the design, called MAXSPLAY, on which
-all users of a shash must agree.  It must be odd, and between 3 and
-255 inclusive.  (Lower limit is inherent in btree structure; upper limit
-is to fit in a byte.)  A suggested value for it is 15.  Each btree node
-except for the root node contains between (MAXSPLAY+1)/2 and MAXSPLAY
-(inclusive) entries.  The root node contains between 2 and MAXSPLAY
-(inclusive) entries if there is at least one layer of btree nodes below
-it, or between 0 and MAXSPLAY (inclusive) entries if its entries are
-individual key/value pairs.  A btree node begins with a word header,
-in which bits are allocated thus:
+A collection of keys and values is represented as a btree (actually a
+B+-tree), in which the keys are sorted lexicographically.  The maximum
+number of entries in a btree node is a parameter to the design, called
+MAXSPLAY, on which all users of a shash must agree.  It must be odd,
+and between 3 and 255 inclusive.  (Lower limit is inherent in btree
+structure; upper limit is to fit in a byte.)  A suggested value for
+it is 15.  Each btree node except for the root node contains between
+(MAXSPLAY+1)/2 and MAXSPLAY (inclusive) entries.  The root node contains
+between 2 and MAXSPLAY (inclusive) entries if there is at least one
+layer of btree nodes below it, or between 0 and MAXSPLAY (inclusive)
+entries if its entries are individual key/value pairs.  A btree node
+begins with a word header, in which bits are allocated thus:
 
 	0-5   layer (0 = pointing directly to key/value pairs)
 	6-7   zero padding
@@ -321,7 +319,9 @@ A new data file should be created directly with its proper data file name.
 This means that it will initially not have the format of a complete data
 file.  This is permitted.  A data file (file with data-style filename)
 is required to be well-formed if and only if it is, or has previously
-been, current.
+been, current.  A process other than the data file's creator cannot
+allocate space in the file, and must not write to it, unless it is,
+or has been, current.
 
 When superseding the current data file, the current file identifier
 must only be increased, aside from when the file identifiers wrap.
@@ -359,13 +359,25 @@ process that superseded them.  However, if a process gets interrupted,
 an obsolete file might persist.  Any writer may unlink any identifiably
 obsolete file, and it is encouraged to periodically do this.
 
+If a process wishes to allocate space for temporary data as part of
+a shash, it can create a file in the shash directory and immediately
+unlink it.  It should be unlinked as soon as it no longer needs to have
+a name.  There are two options for the filename.  Firstly, a data file
+identifier can be allocated, and the resulting data filename used.
+It is not necessary that the file at all resemble a shash data file
+in its format or usage.  Secondly, a temporary filename can be used,
+at the risk of collision with other processes.  A temporary filename
+is always interpreted as obsolete in a fully-created shash, and so is
+liable to be unlinked immediately by another process.
+
 compatibility
 -------------
 
-The design inherently requires that the OS support mmap(2) and openat(2)
-et al, and that the CPU support atomic reading and conditional writing of
-64-bit quantities.  When implementing in C, the compiler must provide
-a 64-bit data type, and must support the atomic operations on it.
-The Intel-specified built-in __sync_bool_compare_and_swap() suffices for
-conditional setting; inline assembler and library functions are other
-possible approaches.
+The design inherently requires that the OS support mmap(2), and that the
+CPU support atomic reading and conditional writing of 64-bit quantities.
+When implementing in C, the compiler must provide a 64-bit data type,
+and must support the atomic operations on it.  The Intel-specified
+built-in __sync_bool_compare_and_swap() suffices for conditional setting;
+inline assembler and library functions are other possible approaches.
+Clean filename resolution semantics for shared hashes requires that the
+OS support openat(2) et al.

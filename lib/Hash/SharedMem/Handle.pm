@@ -24,6 +24,7 @@ Hash::SharedMem::Handle - handle for efficient shared mutable hash
 	tie %shash, "Hash::SharedMem::Handle", $shash;
 	tie %shash, "Hash::SharedMem::Handle", $filename, "rwc";
 
+	$shash = tied(%shash);
 	if(exists($shash{$key})) { ...
 	$value = $shash{$key};
 	$shash{$key} = $newvalue;
@@ -39,22 +40,26 @@ and method interfaces may be intermixed arbitrarily; they are completely
 equivalent in function.  They are not equivalent in performance, however,
 with the method interface being somewhat slower.
 
-This class also supplies a tied-hash interface to shared hashes.  As seen
-through the tied interface, the values in a shared hash can only be octet
-(Latin-1) strings.  The tied interface is much slower than the function
-and method interfaces.
+This class also supplies a tied-hash interface to shared hashes.  The tied
+interface is much slower than the function and method interfaces.
+The behaviour of a tied hash more resembles the function and method
+interfaces to shared hashes than it resembles the syntactically-similar
+use of ordinary Perl hashes.  Using a non-string as a key will result
+in an exception, rather than stringification of the key.  Using a
+string containing a non-octet codepoint as a key will also result in an
+exception, rather than merely referring to an absent hash element.
 
 =cut
 
 package Hash::SharedMem::Handle;
 
-{ use 5.014; }
+{ use 5.006; }
 use warnings;
 use strict;
 
 use Hash::SharedMem ();
 
-our $VERSION = "0.000";
+our $VERSION = "0.001";
 
 =head1 CONSTRUCTOR
 
@@ -121,7 +126,20 @@ hash handle is returned.
 
 =head1 TIED OPERATORS
 
+For all of these operators, the key of interest (I<KEY> parameter)
+and values can each be any octet (Latin-1) string.  Strings containing
+non-octets (Unicode characters above U+FF) and items other than strings
+cannot be used as keys or values.  If a dualvar (scalar with independent
+string and numeric values) is supplied, only its string value will
+be used.
+
 =over
+
+=item tied(%SHASH)
+
+Returns the handle via which I<%SHASH> is bound to the shared hash.
+This is a shared hash handle that can be used by calling the methods
+described above or by passing it to the functions of L<Hash::SharedMem>.
 
 =item exists($SHASH{KEY})
 
@@ -184,6 +202,8 @@ Andrew Main (Zefram) <zefram@fysh.org>
 =head1 COPYRIGHT
 
 Copyright (C) 2014 PhotoBox Ltd
+
+Copyright (C) 2014 Andrew Main (Zefram) <zefram@fysh.org>
 
 =head1 LICENSE
 

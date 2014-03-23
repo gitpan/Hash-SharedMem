@@ -1,3 +1,122 @@
+version 0.001; 2014-03-23
+
+  * bugfix: avoid overflowing a directory entry buffer on OSes where
+    struct dirent is not a suitable size for a buffer
+
+  * bugfix: avoid overflowing a filename buffer when time exceeds the
+    32-bit range (a year 2038 problem) or PIDs are larger than 32 bits
+
+  * ensure reliable behaviour across fork(2), by not holding on to
+    allocated data file space between write operations
+
+  * create all data files with the same permission bits as the master
+    file, so that the permissions set when the shash was created stick,
+    and the umask at the time of shash operations doesn't matter
+
+  * attempt to give all data files the same group and owner as the master
+    file, so that permissions behave as consistently as possible
+
+  * new exported constant shash_referential_handle to indicate whether
+    shared hash handles constitute first-class references to the
+    underlying files
+
+  * detect non-octet string values for key and value parameters reliably
+    and early, consistently signalling the error
+
+  * detect non-string values for filename parameters, signalling the error
+
+  * process get magic on each parameter exactly once per hash operation
+    (though users of the tied interface are at the mercy of the tying
+    infrastructure, which doesn't have such clean behaviour)
+
+  * when attempting to clean a shash directory, if listing the directory
+    fails, report the error, rather than silently abandoning the cleaning
+    attempt
+
+  * when attempting to generate a new data file, if the size is so large
+    as to cast to a negative off_t value, detect it early and report
+    EFBIG, rather than going ahead to create the file and detect the
+    error at ftruncate(2) time
+
+  * if ftruncate(2) reports that a requested file size is too big using
+    errno EINVAL, report it as the more enlightening EFBIG
+
+  * when attempting to iterate a shash directory, if opening the directory
+    fails, detect it and report the real error, rather than going ahead
+    to fdopendir(3) and detecting its EBADF
+
+  * when reporting an error including the name of a shash, to match
+    user expectations use the characters of the filename scalar that
+    was supplied upon opening, even though the octets of the scalar's
+    internal representation are what are actually used as the filename
+
+  * automatically detect and adapt to the machine architecture's line
+    and page size, to improve performance on architectures other than
+    IA32/AMD64
+
+  * port to pre-5.14 Perls, back to 5.6
+
+  * automatically use the -lrt library on systems where it is required
+    in order to get access to clock_gettime(2)
+
+  * cope on systems where openat(2) et al are not available, either not
+    defined by the headers, or defined but not functioning
+
+  * cope on systems where clock_gettime(2) is not available, either not
+    defined by the headers, or defined but not functioning
+
+  * cope on systems where O_CLOEXEC is not available, either not defined
+    by the headers, or defined but not honoured (or not accepted) by
+    the kernel
+
+  * when iterating a shash directory, open a new file descriptor rather
+    than duplicate the existing one, avoiding portability problems with
+    F_DUPFD_CLOEXEC
+
+  * use symbolic constants for file permission bits, for portability to
+    systems where they have non-traditional values
+
+  * cope on systems where the headers don't define MAP_FAILED
+
+  * check at compile time that the word data type is of exactly the
+    required size
+
+  * on Perls that support it, hook into B::Deparse to make the custom
+    ops deparse nicely
+
+  * many new tests
+
+  * document the effects of file-level operations on shared hash
+    directories
+
+  * document the tied(%shash) operator as part of the tied interface
+
+  * clarify documentation about permitted keys and values
+
+  * in documentation, mention serialisation and refer to Sereal
+
+  * perform string equality comparisons more efficiently by specific
+    code separate from ordering comparisons
+
+  * use more efficient variants of Perl API functions where available
+
+  * use the Perl-version-dependent matching data type to save
+    PL_tmps_floor, rather than an invariant sufficiently-large type
+
+  * declare C functions as inline where it'll help for compilers that
+    need the hint
+
+  * make some printf operations cheaper by taking advantage of Perl's
+    requirement that the C int type is at least 32 bits
+
+  * shuffle C struct members for better packing on 32-bit systems
+
+  * small clarifications to design document
+
+  * slight refactoring of C code
+
+  * avoid some C compiler warnings
+
 version 0.000; 2014-02-27
 
   * initial released version
