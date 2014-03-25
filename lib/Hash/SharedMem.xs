@@ -1547,21 +1547,21 @@ static void THX_shash_error_errno(pTHX_ struct shash *sh, char const *action)
 	shash_error_errnum(sh, action, errno);
 }
 
-#define shash_check_readable(sh) THX_shash_check_readable(aTHX_ sh)
-static void THX_shash_check_readable(pTHX_ struct shash *sh)
+#define shash_check_readable(sh, act) THX_shash_check_readable(aTHX_ sh, act)
+static void THX_shash_check_readable(pTHX_ struct shash *sh, char const *action)
 {
 	if(!likely(sh->mode & STOREMODE_READ))
-		shash_error(sh, "read",
+		shash_error(sh, action,
 			"shared hash was opened in unreadable mode");
 }
 
-#define shash_check_writable(sh) THX_shash_check_writable(aTHX_ sh)
-static void THX_shash_check_writable(pTHX_ struct shash *sh)
+#define shash_check_writable(sh, act) THX_shash_check_writable(aTHX_ sh, act)
+static void THX_shash_check_writable(pTHX_ struct shash *sh, char const *action)
 {
 	if(unlikely(sh->mode & STOREMODE_SNAPSHOT))
-		shash_error(sh, "write", "shared hash handle is a snapshot");
+		shash_error(sh, action, "shared hash handle is a snapshot");
 	if(!likely(sh->mode & STOREMODE_WRITE))
-		shash_error(sh, "write",
+		shash_error(sh, action,
 			"shared hash was opened in unwritable mode");
 }
 
@@ -1837,17 +1837,18 @@ static void THX_shash_ensure_data_file(pTHX_ struct shash *sh)
 		shash_error_data(sh);
 }
 
-#define shash_error_toobig(sh) THX_shash_error_toobig(aTHX_ sh)
-static void THX_shash_error_toobig(pTHX_ struct shash *sh)
+#define shash_error_toobig(sh, act) THX_shash_error_toobig(aTHX_ sh, act)
+static void THX_shash_error_toobig(pTHX_ struct shash *sh, char const *action)
 	__attribute__noreturn__;
-static void THX_shash_error_toobig(pTHX_ struct shash *sh)
+static void THX_shash_error_toobig(pTHX_ struct shash *sh, char const *action)
 {
-	shash_error(sh, "write", "data too large for a shared hash");
+	shash_error(sh, action, "data too large for a shared hash");
 }
 
 struct shash_alloc {
 	word prealloc_len;
 	byte *prealloc_loc;
+	char const *action;
 	jmp_buf fulljb;
 };
 
@@ -1859,7 +1860,8 @@ static word *THX_shash_alloc(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	byte *prealloc_end, *loc;
 	word *nextalloc_p, data_size, pos, epos;
 	word wlen = WORD_ALIGN(len), llen;
-	if(!likely(wlen) && unlikely(len)) shash_error_toobig(sh);
+	if(!likely(wlen) && unlikely(len))
+		shash_error_toobig(sh, alloc->action);
 	if(unlikely(wlen <= alloc->prealloc_len)) goto got_prealloc;
 	prealloc_end = alloc->prealloc_loc + alloc->prealloc_len;
 	nextalloc_p = &WORD_AT(sh->data_mmap, sh->sizes->dhd_nextalloc_space);
@@ -1869,7 +1871,7 @@ static word *THX_shash_alloc(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 		shash_error_data(sh);
 	if(likely(&BYTE_AT(sh->data_mmap, pos) == prealloc_end)) {
 		llen = LINE_ALIGN(sh->sizes, wlen - alloc->prealloc_len);
-		if(!likely(llen)) shash_error_toobig(sh);
+		if(!likely(llen)) shash_error_toobig(sh, alloc->action);
 		epos = pos + llen;
 		if(unlikely(epos < pos || epos > data_size))
 			longjmp(alloc->fulljb, 1);
@@ -1880,7 +1882,7 @@ static word *THX_shash_alloc(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 		}
 	}
 	llen = LINE_ALIGN(sh->sizes, wlen);
-	if(!likely(llen)) shash_error_toobig(sh);
+	if(!likely(llen)) shash_error_toobig(sh, alloc->action);
 	while(1) {
 		pos = sync_read_word(nextalloc_p);
 		if(unlikely(!IS_LINE_ALIGNED(sh->sizes, pos) ||
@@ -1927,13 +1929,14 @@ static struct pvl THX_string_as_pvl(pTHX_ struct shash *sh, word ptr)
 
 static MGVTBL const string_mmapref_mgvtbl;
 
-#define string_as_sv(sh, ptr) THX_string_as_sv(aTHX_ sh, ptr)
-static SV *THX_string_as_sv(pTHX_ struct shash *sh, word ptr)
+#define string_as_sv(sh, act, ptr) THX_string_as_sv(aTHX_ sh, act, ptr)
+static SV *THX_string_as_sv(pTHX_ struct shash *sh, char const *action,
+	word ptr)
 {
 	struct pvl pvl = string_as_pvl(sh, ptr);
 	SV *sv;
 	if(unlikely((size_t)(STRLEN)pvl.len != pvl.len))
-		shash_error_errnum(sh, "read", ENOMEM);
+		shash_error_errnum(sh, action, ENOMEM);
 	/*
 	 * There are two strategies available for returning the string
 	 * as an SV.  We can copy into a plain string SV, or we can point
@@ -2014,12 +2017,14 @@ static word THX_string_write_from_pvl(pTHX_ struct shash *sh,
 	struct shash_alloc *alloc, struct pvl pvl)
 {
 	word alloclen, ptr, *loc;
-	if(unlikely((size_t)(word)pvl.len != pvl.len)) shash_error_toobig(sh);
+	if(unlikely((size_t)(word)pvl.len != pvl.len))
+		shash_error_toobig(sh, alloc->action);
 	if(unlikely(pvl.len == 0) &&
 			likely(sh->sizes->dhd_zeropad_sz >= WORD_SZ+1))
 		return ZEROPAD_PTR;
 	alloclen = ((word)pvl.len) + WORD_SZ + 1;
-	if(unlikely(alloclen < WORD_SZ+1)) shash_error_toobig(sh);
+	if(unlikely(alloclen < WORD_SZ+1))
+		shash_error_toobig(sh, alloc->action);
 	loc = shash_alloc(sh, alloc, alloclen, &ptr);
 	loc[0] = pvl.len;
 	(void) memcpy(&loc[1], pvl.pv, pvl.len);
@@ -2350,7 +2355,8 @@ static word THX_btree_set(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 		}
 	} while(layer++ != root_layer);
 	if(likely(ntoin == 1)) return inaval;
-	if(unlikely(layer == LAYER_MAX+1)) shash_error_toobig(sh);
+	if(unlikely(layer == LAYER_MAX+1))
+		shash_error_toobig(sh, alloc->action);
 	nodebody[0] = inakey;
 	nodebody[1] = inaval;
 	nodebody[2] = inbkey;
@@ -2394,7 +2400,10 @@ static word THX_btree_size_at_layer(pTHX_ struct shash *sh, word ptr,
 #define btree_size(sh, rt) THX_btree_size(aTHX_ sh, rt)
 PERL_STATIC_INLINE word THX_btree_size(pTHX_ struct shash *sh, word root)
 {
-	return btree_size_at_layer(sh, root, -1);
+	word sz = btree_size_at_layer(sh, root, -1);
+	if(!likely(sz)) return 0;
+	sz = LINE_ALIGN(sh->sizes, sz);
+	return sz ? sz : ~(word)0;
 }
 
 #define btree_migrate_at_layer(shf, ptrf, el, sht, alloct) \
@@ -2425,13 +2434,15 @@ static word THX_btree_migrate_at_layer(pTHX_ struct shash *shf, word ptrf,
 	return bnode_write(sht, alloct, layer, splay, nodebody);
 }
 
-#define btree_migrate(shf, ptrf, sht) THX_btree_migrate(aTHX_ shf, ptrf, sht)
+#define btree_migrate(shf, ptrf, sht, act) \
+	THX_btree_migrate(aTHX_ shf, ptrf, sht, act)
 static word THX_btree_migrate(pTHX_ struct shash *shf, word ptrf,
-	struct shash *sht)
+	struct shash *sht, char const *action)
 {
 	struct shash_alloc new_alloc;
 	if(unlikely(setjmp(new_alloc.fulljb)))
-		shash_error_errnum(sht, "write", ENOSPC);
+		shash_error_errnum(sht, action, ENOSPC);
+	new_alloc.action = action;
 	new_alloc.prealloc_len = 0;
 	return btree_migrate_at_layer(shf, ptrf, -1, sht, &new_alloc);
 }
@@ -2466,13 +2477,15 @@ PERL_STATIC_INLINE void THX_shash_initiate_rollover(pTHX_ struct shash *sh)
 	}
 }
 
-#define shash_do_rollover(sh, addsz) THX_shash_do_rollover(aTHX_ sh, addsz)
-PERL_STATIC_INLINE word THX_shash_do_rollover(pTHX_ struct shash *sh,
-	word addsz)
+#define shash_try_rollover(sh, act, addsz) \
+	THX_shash_try_rollover(aTHX_ sh, act, addsz)
+PERL_STATIC_INLINE word THX_shash_try_rollover(pTHX_ struct shash *sh,
+	char const *action, word addsz)
 {
 	char filename[DATA_FILENAME_BUFSIZE];
 	word *allocfileid_p;
-	word old_file_id, old_root, new_file_id, new_root, new_sz;
+	word old_file_id, old_root_word, old_root;
+	word new_file_id, new_root, new_sz;
 	struct stat statbuf;
 	int new_fd;
 	unlinkfile_ref_t new_ulr;
@@ -2480,19 +2493,19 @@ PERL_STATIC_INLINE word THX_shash_do_rollover(pTHX_ struct shash *sh,
 	struct shash new_sh;
 	SV *old_mmap_sv;
 	tmps_ix_t old_tmps_floor;
-	old_root = sync_read_word(&WORD_AT(sh->data_mmap,
-						sh->sizes->dhd_current_root)) &
-			~PTR_FLAG_ROLLOVER;
+	old_root_word = sync_read_word(&WORD_AT(sh->data_mmap,
+						sh->sizes->dhd_current_root));
+	old_root = old_root_word & ~PTR_FLAG_ROLLOVER;
 	new_sz = sh->sizes->dhd_sz + btree_size(sh, old_root);
 	if(unlikely(new_sz < sh->sizes->dhd_sz || (new_sz & (((word)7) << 61))))
-		shash_error_toobig(sh);
+		shash_error_toobig(sh, action);
 	new_sz <<= 3;
 	new_sz += addsz;
-	if(unlikely(new_sz < addsz)) shash_error_toobig(sh);
+	if(unlikely(new_sz < addsz)) shash_error_toobig(sh, action);
 	new_sz = PAGE_ALIGN(sh->sizes, new_sz);
-	if(unlikely(!new_sz)) shash_error_toobig(sh);
+	if(unlikely(!new_sz)) shash_error_toobig(sh, action);
 	if(unlikely((off_t)new_sz < 0 || (word)(off_t)new_sz != new_sz))
-		shash_error_errnum(sh, "write", EFBIG);
+		shash_error_errnum(sh, action, EFBIG);
 	new_sh.sizes = sh->sizes;
 	new_sh.parameter = sh->parameter;
 	new_sh.top_pathname_sv = sh->top_pathname_sv;
@@ -2506,22 +2519,22 @@ PERL_STATIC_INLINE word THX_shash_do_rollover(pTHX_ struct shash *sh,
 				old_file_id, new_file_id)));
 	if(unlikely(dirref_via_stat(sh->u.live.dir, MASTER_FILENAME, &statbuf)
 			== -1))
-		shash_error_errno(sh, "write");
+		shash_error_errno(sh, action);
 	dir_make_data_filename(filename, new_file_id);
 	new_fd = dirref_via_open_cloexec(sh->u.live.dir, filename,
 			O_RDWR|O_CREAT|O_EXCL, 0);
-	if(unlikely(new_fd == -1)) shash_error_errno(sh, "write");
+	if(unlikely(new_fd == -1)) shash_error_errno(sh, action);
 	new_ulr = unlinkfile_save(sh->u.live.dir, filename);
 	if(unlikely(fchown(new_fd, -1, statbuf.st_gid) == -1) &&
 			unlikely(errno != EPERM))
-		shash_error_errno(sh, "write");
+		shash_error_errno(sh, action);
 	if(unlikely(fchmod(new_fd, statbuf.st_mode &
 			(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH))
 			== -1))
-		shash_error_errno(sh, "write");
+		shash_error_errno(sh, action);
 	if(unlikely(fchown(new_fd, statbuf.st_uid, -1) == -1) &&
 			unlikely(errno != EPERM))
-		shash_error_errno(sh, "write");
+		shash_error_errno(sh, action);
 	new_fdr = closefd_save(new_fd);
 	if(unlikely(ftruncate(new_fd, new_sz) == -1)) {
 		/*
@@ -2530,12 +2543,12 @@ PERL_STATIC_INLINE word THX_shash_do_rollover(pTHX_ struct shash *sh,
 		 * enlightening to the user, so always report it that way.
 		 */
 		int e = errno;
-		shash_error_errnum(sh, "write", e == EINVAL ? EFBIG : e);
+		shash_error_errnum(sh, action, e == EINVAL ? EFBIG : e);
 	}
 	old_tmps_floor = PL_tmps_floor;
 	SAVETMPS;
 	new_sh.data_mmap_sv = mmap_as_sv(new_fd, new_sz, 1);
-	if(!new_sh.data_mmap_sv) shash_error_errno(sh, "write");
+	if(!new_sh.data_mmap_sv) shash_error_errno(sh, action);
 	new_sh.data_mmap = mmap_addr_from_sv(new_sh.data_mmap_sv);
 	new_sh.data_size = new_sz;
 	closefd_early(new_fdr);
@@ -2545,11 +2558,18 @@ PERL_STATIC_INLINE word THX_shash_do_rollover(pTHX_ struct shash *sh,
 	WORD_AT(new_sh.data_mmap, sh->sizes->dhd_nextalloc_space) =
 		sh->sizes->dhd_sz;
 	WORD_AT(new_sh.data_mmap, sh->sizes->dhd_current_root) = new_root =
-		btree_migrate(sh, old_root, &new_sh);
+		btree_migrate(sh, old_root, &new_sh, action);
 	old_file_id = sh->u.live.data_file_id;
-	if(!likely(__sync_bool_compare_and_swap(&WORD_AT(sh->u.live.master_mmap,
+	if((!(old_root_word & PTR_FLAG_ROLLOVER) &&
+			!likely(__sync_bool_compare_and_swap(
+				&WORD_AT(sh->data_mmap,
+					sh->sizes->dhd_current_root),
+				old_root_word,
+				old_root_word | PTR_FLAG_ROLLOVER))) ||
+			!likely(__sync_bool_compare_and_swap(
+				&WORD_AT(sh->u.live.master_mmap,
 					sh->sizes->mfl_current_datafileid),
-			old_file_id, new_file_id))) {
+				old_file_id, new_file_id))) {
 		unlinkfile_early(new_ulr);
 		FREETMPS;
 		PL_tmps_floor = old_tmps_floor;
@@ -2569,24 +2589,25 @@ PERL_STATIC_INLINE word THX_shash_do_rollover(pTHX_ struct shash *sh,
 		dir_make_data_filename(filename, old_file_id);
 		(void) dirref_via_unlink(sh->u.live.dir, filename);
 	}
-	dir_clean(sh, "write", new_file_id);
 	return new_root;
 }
 
 typedef word (*mutate_fn_t)(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	word oldroot, void *mutate_arg);
 
-#define shash_mutate(sh, mut, marg) THX_shash_mutate(aTHX_ sh, mut, marg)
-static void THX_shash_mutate(pTHX_ struct shash *sh,
+#define shash_mutate(sh, act, mut, marg) \
+	THX_shash_mutate(aTHX_ sh, act, mut, marg)
+static void THX_shash_mutate(pTHX_ struct shash *sh, char const *action,
 	mutate_fn_t THX_mutate, void *mutate_arg)
 {
 	struct shash_alloc alloc;
 	volatile word addsz = PAGE_ALIGN(sh->sizes, 1<<20);
 	volatile bool just_rolled_over = 0;
+	alloc.action = action;
 	if(unlikely(setjmp(alloc.fulljb))) {
 		if(unlikely(just_rolled_over)) {
 			word newaddsz = addsz <<= 1;
-			if(!likely(newaddsz)) shash_error_toobig(sh);
+			if(!likely(newaddsz)) shash_error_toobig(sh, action);
 		}
 		shash_initiate_rollover(sh);
 	}
@@ -2597,8 +2618,9 @@ static void THX_shash_mutate(pTHX_ struct shash *sh,
 		old_root = sync_read_word(&WORD_AT(sh->data_mmap,
 						sh->sizes->dhd_current_root));
 		if(unlikely(old_root & PTR_FLAG_ROLLOVER)) {
-			old_root = shash_do_rollover(sh, addsz);
+			old_root = shash_try_rollover(sh, action, addsz);
 			if(unlikely(old_root == NULL_PTR)) continue;
+			dir_clean(sh, action, sh->u.live.data_file_id);
 			just_rolled_over = 1;
 		}
 		alloc.prealloc_len = 0;
@@ -2905,7 +2927,7 @@ static void THX_pp1_shash_getd(pTHX)
 	PUTBACK;
 	sh = shash_from_svref(TOPs);
 	keypvl = pvl_from_arg("key", 0, keysv);
-	shash_check_readable(sh);
+	shash_check_readable(sh, "read");
 	resultsv = boolSV(btree_get(sh, shash_root_for_read(sh), keypvl)
 				!= NULL_PTR);
 	SPAGAIN;
@@ -2924,9 +2946,10 @@ static void THX_pp1_shash_get(pTHX)
 	PUTBACK;
 	sh = shash_from_svref(TOPs);
 	keypvl = pvl_from_arg("key", 0, keysv);
-	shash_check_readable(sh);
+	shash_check_readable(sh, "read");
 	valptr = btree_get(sh, shash_root_for_read(sh), keypvl);
-	valsv = valptr == NULL_PTR ? &PL_sv_undef : string_as_sv(sh, valptr);
+	valsv = valptr == NULL_PTR ? &PL_sv_undef :
+		string_as_sv(sh, "read", valptr);
 	SPAGAIN;
 	SETs(valsv);
 }
@@ -2957,8 +2980,8 @@ static void THX_pp1_shash_settish(pTHX_ bool allow_undef)
 	PUTBACK;
 	args.keypvl = pvl_from_arg("key", 0, keysv);
 	args.newvalpvl = pvl_from_arg("new value", allow_undef, newvalsv);
-	shash_check_writable(sh);
-	shash_mutate(sh, THX_mutate_set, &args);
+	shash_check_writable(sh, "write");
+	shash_mutate(sh, "write", THX_mutate_set, &args);
 }
 
 #define pp1_shash_set() THX_pp1_shash_set(aTHX)
@@ -3000,11 +3023,11 @@ static void THX_pp1_shash_gset(pTHX)
 	sh = shash_from_svref(TOPs);
 	args.keypvl = pvl_from_arg("key", 0, keysv);
 	args.newvalpvl = pvl_from_arg("new value", 1, newvalsv);
-	shash_check_readable(sh);
-	shash_check_writable(sh);
-	shash_mutate(sh, THX_mutate_gset, &args);
+	shash_check_readable(sh, "update");
+	shash_check_writable(sh, "update");
+	shash_mutate(sh, "update", THX_mutate_gset, &args);
 	oldvalsv = args.oldvalptr == NULL_PTR ? &PL_sv_undef :
-					string_as_sv(sh, args.oldvalptr);
+				string_as_sv(sh, "update", args.oldvalptr);
 	SPAGAIN;
 	SETs(oldvalsv);
 }
@@ -3055,9 +3078,9 @@ static void THX_pp1_shash_cset(pTHX)
 	args.keypvl = pvl_from_arg("key", 0, keysv);
 	args.chkvalpvl = pvl_from_arg("check value", 1, chkvalsv);
 	args.newvalpvl = pvl_from_arg("new value", 1, newvalsv);
-	shash_check_readable(sh);
-	shash_check_writable(sh);
-	shash_mutate(sh, THX_mutate_cset, &args);
+	shash_check_readable(sh, "update");
+	shash_check_writable(sh, "update");
+	shash_mutate(sh, "update", THX_mutate_cset, &args);
 	SPAGAIN;
 	SETs(boolSV(args.result));
 }
@@ -3101,6 +3124,27 @@ static void THX_pp1_shash_is_snapshot(pTHX)
 	SETs(boolSV(shash_from_svref(TOPs)->mode & STOREMODE_SNAPSHOT));
 }
 
+#define pp1_shash_tidy() THX_pp1_shash_tidy(aTHX)
+static void THX_pp1_shash_tidy(pTHX)
+{
+	int tries;
+	dSP;
+	struct shash *sh = shash_from_svref(POPs);
+	if(unlikely(GIMME_V == G_SCALAR)) PUSHs(&PL_sv_undef);
+	PUTBACK;
+	shash_check_writable(sh, "tidy");
+	for(tries = 3; tries--; ) {
+		shash_ensure_data_file(sh);
+		if(!likely(sh->u.live.data_file_id)) break;
+		if(likely(sync_read_word(&WORD_AT(sh->data_mmap,
+					sh->sizes->dhd_nextalloc_space)) <
+					(sh->data_size >> 1)))
+			break;
+		if(likely(shash_try_rollover(sh, "tidy", 0) != NULL_PTR)) break;
+	}
+	dir_clean(sh, "tidy", sh->u.live.data_file_id);
+}
+
 /* API operations in pp form for ops */
 
 #ifdef cv_set_call_checker
@@ -3125,6 +3169,7 @@ HSM_MAKE_PP(shash_gset)
 HSM_MAKE_PP(shash_cset)
 HSM_MAKE_PP(shash_snapshot)
 HSM_MAKE_PP(shash_is_snapshot)
+HSM_MAKE_PP(shash_tidy)
 
 #endif /* cv_set_call_checker */
 
@@ -3158,6 +3203,7 @@ HSM_MAKE_XSFUNC(shash_tied_delete, 2, "shash, key")
 HSM_MAKE_XSFUNC(shash_cset, 4, "shash, key, chkvalue, newvalue")
 HSM_MAKE_XSFUNC(shash_snapshot, 1, "shash")
 HSM_MAKE_XSFUNC(shash_is_snapshot, 1, "shash")
+HSM_MAKE_XSFUNC(shash_tidy, 1, "shash")
 
 #ifndef PERL_ARGS_ASSERT_CROAK_XS_USAGE
 # undef croak_xs_usage
@@ -3247,6 +3293,7 @@ BOOT:
 		HSM_FUNC_TO_INSTALL(shash_cset, 4),
 		HSM_FUNC_TO_INSTALL(shash_snapshot, 1),
 		HSM_FUNC_TO_INSTALL(shash_is_snapshot, 1),
+		HSM_FUNC_TO_INSTALL(shash_tidy, 1),
 	}, *fti;
 	int i;
 	for(i = C_ARRAY_LENGTH(funcs_to_install); i--; ) {

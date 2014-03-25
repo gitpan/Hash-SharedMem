@@ -1,3 +1,14 @@
+version 0.002; 2014-03-25
+
+  * new function shash_tidy() to make data file rollover happen at a
+    convenient time
+
+  * in many error messages, state more specifically and consistently
+    what kind of action has failed
+
+  * in documentation, consistently describe the content of a shared hash
+    as "content" rather than "contents"
+
 version 0.001; 2014-03-23
 
   * bugfix: avoid overflowing a directory entry buffer on OSes where

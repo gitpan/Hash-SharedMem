@@ -57,11 +57,11 @@
    "provides" : {
       "Hash::SharedMem" : {
          "file" : "lib/Hash/SharedMem.pm",
-         "version" : "0.001"
+         "version" : "0.002"
       },
       "Hash::SharedMem::Handle" : {
          "file" : "lib/Hash/SharedMem/Handle.pm",
-         "version" : "0.001"
+         "version" : "0.002"
       }
    },
    "release_status" : "stable",
@@ -70,5 +70,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.001"
+   "version" : "0.002"
 }

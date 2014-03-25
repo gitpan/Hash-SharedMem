@@ -113,16 +113,16 @@ eval { $sh{a101} = "b101" };
 like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t0:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 eval { my $z = delete $sh{a100} };
-like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t0:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t0:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 eval { my $z = delete $sh{a101} };
-like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t0:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t0:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 eval { delete $sh{a100} };
-like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t0:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t0:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 eval { delete $sh{a101} };
-like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t0:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t0:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 
 untie %sh;
@@ -140,10 +140,10 @@ eval { $sh{a100} = "b100" };
 like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 eval { my $z = delete $sh{a100} };
-like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unreadable\ mode\ #x;
 eval { delete $sh{a100} };
-like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unreadable\ mode\ #x;
 
 untie %sh;
@@ -160,10 +160,10 @@ like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
 eval { $sh{a100} = "b100" };
 is $@, "";
 eval { my $z = delete $sh{a100} };
-like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unreadable\ mode\ #x;
 eval { delete $sh{a100} };
-like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unreadable\ mode\ #x;
 
 eval { %sh = () };

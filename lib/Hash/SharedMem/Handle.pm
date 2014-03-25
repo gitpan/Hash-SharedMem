@@ -21,6 +21,8 @@ Hash::SharedMem::Handle - handle for efficient shared mutable hash
 	$snap_shash = $shash->snapshot;
 	if($shash->is_snapshot) { ...
 
+	$shash->tidy;
+
 	tie %shash, "Hash::SharedMem::Handle", $shash;
 	tie %shash, "Hash::SharedMem::Handle", $filename, "rwc";
 
@@ -59,7 +61,7 @@ use strict;
 
 use Hash::SharedMem ();
 
-our $VERSION = "0.001";
+our $VERSION = "0.002";
 
 =head1 CONSTRUCTOR
 
@@ -96,6 +98,8 @@ See L<Hash::SharedMem/shash_open> for details.
 =item $shash->snapshot
 
 =item $shash->is_snapshot
+
+=item $shash->tidy
 
 These methods are each equivalent to the corresponding
 "C<shash_>"-prefixed function in L<Hash::SharedMem>.  See that document
@@ -164,8 +168,8 @@ if the key was already absent.  This swap is performed atomically.
 
 =item %SHASH = LIST
 
-Setting the entire contents of the shared hash (throwing away the previous
-contents) is not supported.
+Setting the entire content of the shared hash (throwing away the previous
+content) is not supported.
 
 =item each(%SHASH)
 
@@ -175,7 +179,7 @@ contents) is not supported.
 
 =item %SHASH
 
-Iteration over, or enumeration of, the shared hash's contents is not
+Iteration over, or enumeration of, the shared hash's content is not
 supported.
 
 =item scalar(%SHASH)

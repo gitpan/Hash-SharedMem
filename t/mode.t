@@ -4,7 +4,7 @@ use strict;
 use Errno 1.00 qw(ENOENT EEXIST);
 use File::Temp 0.22 qw(tempdir);
 use POSIX qw(strerror);
-use Test::More tests => 1123;
+use Test::More tests => 1155;
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash
@@ -12,6 +12,7 @@ BEGIN { use_ok "Hash::SharedMem", qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
+	shash_tidy
 ); }
 require_ok "Hash::SharedMem::Handle";
 
@@ -77,11 +78,11 @@ sub test_shash_ops($$$) {
 		is $@, "";
 		is $v, undef;
 	} elsif($iomode =~ /r/) {
-		like $@, qr#\Acan't\ write\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unwritable\ mode\ #x;
 	} else {
-		like $@, qr#\Acan't\ read\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}
@@ -90,13 +91,21 @@ sub test_shash_ops($$$) {
 		is $@, "";
 		is $v, !!0;
 	} elsif($iomode =~ /r/) {
-		like $@, qr#\Acan't\ write\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unwritable\ mode\ #x;
 	} else {
-		like $@, qr#\Acan't\ read\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
+	}
+	eval { shash_tidy($sh) };
+	if($iomode =~ /w/) {
+		is $@, "";
+	} else {
+		like $@, qr#\Acan't\ tidy\ shared\ hash\ \Q$name\E:
+				\ shared\ hash\ was\ opened
+				\ in\ unwritable\ mode\ #x;
 	}
 	my %sh;
 	tie %sh, "Hash::SharedMem::Handle", $sh;
@@ -133,11 +142,11 @@ sub test_shash_ops($$$) {
 		is $@, "";
 		is $v, undef;
 	} elsif($iomode =~ /r/) {
-		like $@, qr#\Acan't\ write\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unwritable\ mode\ #x;
 	} else {
-		like $@, qr#\Acan't\ read\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}
@@ -170,22 +179,25 @@ sub test_shash_ops($$$) {
 			\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
 	$v = eval { shash_gset($sh, $i++, $i++) };
 	if($iomode =~ /r/) {
-		like $@, qr#\Acan't\ write\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
 	} else {
-		like $@, qr#\Acan't\ read\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}
 	$v = eval { shash_cset($sh, $i++, $i++, $i++) };
 	if($iomode =~ /r/) {
-		like $@, qr#\Acan't\ write\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
 	} else {
-		like $@, qr#\Acan't\ read\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}
+	eval { shash_tidy($sh) };
+	like $@, qr#\Acan't\ tidy\ shared\ hash\ \Q$name\E:
+			\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
 	tie %sh, "Hash::SharedMem::Handle", $sh;
 	ok is_shash(tied(%sh));
 	ok tied(%sh) == $sh;
@@ -212,10 +224,10 @@ sub test_shash_ops($$$) {
 			\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
 	$v = eval { delete($sh{$i++}) };
 	if($iomode =~ /r/) {
-		like $@, qr#\Acan't\ write\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
 	} else {
-		like $@, qr#\Acan't\ read\ shared\ hash\ \Q$name\E:
+		like $@, qr#\Acan't\ update\ shared\ hash\ \Q$name\E:
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}

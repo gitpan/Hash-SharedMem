@@ -39,6 +39,10 @@ Hash::SharedMem - efficient shared mutable hash
 	$snap_shash = shash_snapshot($shash);
 	if(shash_is_snapshot($shash)) { ...
 
+	use Hash::SharedMem qw(shash_tidy);
+
+	shash_tidy($shash);
+
 =head1 DESCRIPTION
 
 This module provides a facility for efficiently sharing mutable data
@@ -247,7 +251,7 @@ package Hash::SharedMem;
 use warnings;
 use strict;
 
-our $VERSION = "0.001";
+our $VERSION = "0.002";
 
 use parent "Exporter";
 our @EXPORT_OK = qw(
@@ -257,6 +261,7 @@ our @EXPORT_OK = qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
+	shash_tidy
 );
 
 eval { local $SIG{__DIE__};
@@ -476,7 +481,7 @@ an atomic increment can be implemented as
 
 =item shash_snapshot(SHASH)
 
-Returns a shared hash handle that encapsulates the current contents of the
+Returns a shared hash handle that encapsulates the current content of the
 shared hash.  The entire state of the shared hash is captured atomically,
 and the returned handle can be used to perform arbitrarily many read
 operations on that state: it will never reflect later modifications to
@@ -486,6 +491,36 @@ the shared hash.  The snapshot handle cannot be used for writing.
 
 Returns a truth value indicating whether this handle refers to a snapshot
 (as opposed to a live shared hash).
+
+=back
+
+=head2 Maintenance
+
+=over
+
+=item shash_tidy(SHASH)
+
+Rearranges the storage of the shared hash if it seems useful to do
+so, to avoid tidying work having to be performed by other processes.
+This doesn't change the visible content of the shared hash, but the
+handle must be open for writing.  The invisible operations performed by
+this function may vary between versions of this module.
+
+This function should be called in circumstances where it is acceptable
+to incur some delay for this maintenance work to complete.  For example,
+it could be called periodically by a cron job.  Essentially, calling this
+function signals that this is a convenient time at which (and process
+in which) to perform maintenance.
+
+If this maintenance work is not carried out by means of this function,
+then ultimately it will be performed anyway, but less predictably and
+possibly less conveniently.  Eventually it will become necessary to
+perform maintenance in order to continue using the shared hash, at which
+point the next process that attempts to write to it will carry out the
+work and incur the cost.  The shared hash will still work properly in
+that case, but the unlucky writer will experience a disproportionately
+large delay in the completion of its write operation.  This could well
+be a problem if the shared hash is large.
 
 =back
 

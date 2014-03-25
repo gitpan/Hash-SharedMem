@@ -2,7 +2,7 @@ use warnings;
 use strict;
 
 use File::Temp 0.22 qw(tempdir);
-use Test::More tests => 212;
+use Test::More tests => 214;
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash check_shash
@@ -10,6 +10,7 @@ BEGIN { use_ok "Hash::SharedMem", qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
+	shash_tidy
 ); }
 
 is scalar(is_shash("foo")), !!0;
@@ -248,6 +249,10 @@ is shash_get($sh, "a115"), undef;
 is_deeply [shash_cset($sh, "a115", undef, undef)], [!!1];
 is shash_get($sh, "a115"), undef;
 
+shash_tidy($sh);
+is scalar(shash_tidy($sh)), undef;
+is_deeply [shash_tidy($sh)], [];
+
 my $nx = shash_open("$tmpdir/t1", "c");
 ok $nx;
 is scalar(is_shash($nx)), !!1;
@@ -274,10 +279,10 @@ eval { shash_set($nx, "a100", "b100") };
 like $@, qr#\Acan't\ write\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unwritable\ mode\ #x;
 eval { shash_gset($nx, "a100", "b100") };
-like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unreadable\ mode\ #x;
 eval { shash_cset($nx, "a100", "b100", "c100") };
-like $@, qr#\Acan't\ read\ shared\ hash\ \Q$tmpdir\E/t1:
+like $@, qr#\Acan't\ update\ shared\ hash\ \Q$tmpdir\E/t1:
 		\ shared\ hash\ was\ opened\ in\ unreadable\ mode\ #x;
 
 eval { shash_open("$tmpdir/t1", "c") };

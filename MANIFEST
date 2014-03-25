@@ -34,5 +34,6 @@ t/pod_cvg.t
 t/pod_syn.t
 t/rename.t
 t/snapshot.t
+t/tidy.t
 t/tie.t
 SIGNATURE    Added here by Module::Build
