@@ -2,13 +2,15 @@ use warnings;
 use strict;
 
 use File::Temp 0.22 qw(tempdir);
-use Test::More tests => 501;
+use Test::More tests => 528;
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash check_shash shash_open
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
+	shash_idle shash_tidy
+	shash_tally_get shash_tally_zero shash_tally_gzero
 ); }
 
 my $tmpdir = tempdir(CLEANUP => 1);
@@ -331,6 +333,49 @@ tm1 { is shash_is_snapshot($magic), !!0 } $sh;
 tm1 { is shash_is_snapshot($magic), !!0 } $sh, [];
 tm1 { is shash_is_snapshot($magic), !!1 } $sn;
 tm1 { is shash_is_snapshot($magic), !!1 } $sn, [];
+
+tm1 {
+	is eval { shash_idle($magic) }, undef;
+	like $@, qr/\Ahandle is not a shared hash handle /;
+} [], $sh;
+tm1 { shash_idle($magic) } $sh;
+
+tm1 {
+	is eval { shash_tidy($magic) }, undef;
+	like $@, qr/\Ahandle is not a shared hash handle /;
+} [], $sh;
+tm1 { shash_tidy($magic) } $sh;
+
+tm1 {
+	is eval { shash_tally_get($magic) }, undef;
+	like $@, qr/\Ahandle is not a shared hash handle /;
+} [], $sh;
+tm1 {
+	my $h = shash_tally_get($magic);
+	is ref($h), "HASH";
+	ok !grep { !/\A[a-z_]+\z/ } keys %$h;
+	ok !grep { !/\A(?:0|[1-9][0-9]*)\z/ } values %$h;
+} $sh;
+
+tm1 {
+	is eval { shash_tally_zero($magic) }, undef;
+	like $@, qr/\Ahandle is not a shared hash handle /;
+} [], $sh;
+tm1 {
+	my $v = shash_tally_zero($magic);
+	is $v, undef;
+} $sh;
+
+tm1 {
+	is eval { shash_tally_gzero($magic) }, undef;
+	like $@, qr/\Ahandle is not a shared hash handle /;
+} [], $sh;
+tm1 {
+	my $h = shash_tally_gzero($magic);
+	is ref($h), "HASH";
+	ok !grep { !/\A[a-z_]+\z/ } keys %$h;
+	ok !grep { !/\A(?:0|[1-9][0-9]*)\z/ } values %$h;
+} $sh;
 
 require_ok "Hash::SharedMem::Handle";
 

@@ -64,62 +64,22 @@
 # define Newxz(v,n,t) Newz(0,v,n,t)
 #endif /* !Newxz */
 
-#ifndef ptr_table_new
-
-struct q_ptr_tbl_ent {
-	struct q_ptr_tbl_ent *next;
-	void *from, *to;
-};
-
-# undef PTR_TBL_t
-# define PTR_TBL_t struct q_ptr_tbl_ent *
-
-# define ptr_table_new() THX_ptr_table_new(aTHX)
-PERL_STATIC_INLINE PTR_TBL_t *THX_ptr_table_new(pTHX)
+#ifndef newSVpv_share
+# ifdef newSVpvn_share
+#  define newSVpv_share(pv, hash) THX_newSVpv_share(aTHX_ pv, hash)
+PERL_STATIC_INLINE SV *THX_newSVpv_share(pTHX_ char const *pv, U32 hash)
 {
-	PTR_TBL_t *tbl;
-	Newx(tbl, 1, PTR_TBL_t);
-	*tbl = NULL;
-	return tbl;
+	return newSVpvn_share(pv, strlen(pv), hash);
 }
+# else /* !newSVpvn_share */
+#  define newSVpv_share(pv, hash) newSVpv(pv, 0)
+#  define SvSHARED_HASH(sv) 0
+# endif /* !newSVpvn_share */
+#endif /* !newSVpv_share */
 
-# if 0
-#  define ptr_table_free(tbl) THX_ptr_table_free(aTHX_ tbl)
-PERL_STATIC_INLINE void THX_ptr_table_free(pTHX_ PTR_TBL_t *tbl)
-{
-	struct q_ptr_tbl_ent *ent = *tbl;
-	Safefree(tbl);
-	while(ent) {
-	        struct q_ptr_tbl_ent *nent = ent->next;
-	        Safefree(ent);
-	        ent = nent;
-	}
-}
-# endif /* 0 */
-
-# define ptr_table_store(tbl, from, to) THX_ptr_table_store(aTHX_ tbl, from, to)
-PERL_STATIC_INLINE void THX_ptr_table_store(pTHX_ PTR_TBL_t *tbl, void *from,
-	void *to)
-{
-	struct q_ptr_tbl_ent *ent;
-	Newx(ent, 1, struct q_ptr_tbl_ent);
-	ent->next = *tbl;
-	ent->from = from;
-	ent->to = to;
-	*tbl = ent;
-}
-
-# define ptr_table_fetch(tbl, from) THX_ptr_table_fetch(aTHX_ tbl, from)
-PERL_STATIC_INLINE void *THX_ptr_table_fetch(pTHX_ PTR_TBL_t *tbl, void *from)
-{
-	struct q_ptr_tbl_ent *ent;
-	for(ent = *tbl; ent; ent = ent->next) {
-	        if(ent->from == from) return ent->to;
-	}
-	return NULL;
-}
-
-#endif /* !ptr_table_new */
+#ifndef SvSHARED_HASH
+# define SvSHARED_HASH(sv) SvUVX(sv)
+#endif /* !SvSHARED_HASH */
 
 #ifndef SvREFCNT_inc_NN
 # define SvREFCNT_inc_NN SvREFCNT_inc
@@ -177,15 +137,16 @@ static MAGIC *THX_sv_magicext(pTHX_ SV *sv, SV *obj, int type,
 	MGVTBL const *vtbl, char const *name, I32 namlen)
 {
 	MAGIC *mg;
-	PERL_UNUSED_ARG(name);
 	PERL_UNUSED_ARG(namlen);
 	Newxz(mg, 1, MAGIC);
 	mg->mg_virtual = (MGVTBL*)vtbl;
 	mg->mg_type = type;
-	if(likely(obj)) {
-		mg->mg_obj = SvREFCNT_inc_simple_NN(obj);
+	mg->mg_obj = obj;
+	if(likely(obj && obj != sv)) {
+		SvREFCNT_inc_simple_void_NN(obj);
 		mg->mg_flags |= MGf_REFCOUNTED;
 	}
+	mg->mg_ptr = (char*)name;
 	(void) SvUPGRADE(sv, SVt_PVMG);
 	mg->mg_moremagic = SvMAGIC(sv);
 	SvMAGIC_set(sv, mg);
@@ -201,7 +162,7 @@ PERL_STATIC_INLINE int THX_sv_unmagicext(pTHX_ SV *sv, int type,
 	MGVTBL const *vtbl)
 {
 	MAGIC *mg, **mgp;
-	if(SvTYPE(sv) < SVt_PVMG || !SvMAGIC(sv)) return 0;
+	if(unlikely(SvTYPE(sv) < SVt_PVMG || !SvMAGIC(sv))) return 0;
 	mgp = NULL;
 	for(mg = SvMAGIC(sv); mg; mg = unlikely(mgp) ? *mgp : SvMAGIC(sv)) {
 		if(likely(mg->mg_type == type && mg->mg_virtual == vtbl)) {
@@ -247,17 +208,22 @@ static SV *THX_newSV_type(pTHX_ svtype type)
 		hv_store(hv, ""keystr"", sizeof(keystr)-1, val, 0)
 #endif /* !hv_stores */
 
+#if defined(USE_ITHREADS) && !defined(sv_dup_inc)
+# define sv_dup_inc(sv, param) SvREFCNT_inc(sv_dup(sv, param))
+#endif /* USE_ITHREADS && !sv_dup_inc */
+
 #if !PERL_VERSION_GE(5,9,3)
 typedef OP *(*Perl_ppaddr_t)(pTHX);
 #endif /* <5.9.3 */
 
 #ifndef SvPV_nomg
 # define SvPV_nomg(sv, len) \
-	(SvGMAGICAL(sv) ? THX_SvPV_nomg_magical(aTHX_ sv, &(len)) : \
+	(unlikely(SvGMAGICAL(sv)) ? THX_SvPV_nomg_magical(aTHX_ sv, &(len)) : \
 		SvPV(sv, len))
 struct remagic {
 	SV *sv;
 	MAGIC *mg;
+	U32 flags;
 };
 static void THX_remagic_cleanup(pTHX_ void *remagic_v)
 {
@@ -265,6 +231,7 @@ static void THX_remagic_cleanup(pTHX_ void *remagic_v)
 	Safefree(remagic_v);
 	if(unlikely(remagic.sv)) {
 		SvMAGIC(remagic.sv) = remagic.mg;
+		SvFLAGS(remagic.sv) |= remagic.flags;
 		SvREFCNT_dec_NN(remagic.sv);
 	}
 }
@@ -275,16 +242,64 @@ static char *THX_SvPV_nomg_magical(pTHX_ SV *sv, STRLEN *len_p)
 	Newx(remagic, 1, struct remagic);
 	remagic->sv = sv;
 	remagic->mg = SvMAGIC(sv);
+	remagic->flags = SvMAGICAL(sv);
 	SAVEDESTRUCTOR_X(THX_remagic_cleanup, remagic);
 	SvREFCNT_inc_simple_void_NN(sv);
 	SvMAGIC(sv) = NULL;
 	pv = SvPV(sv, *len_p);
 	SvMAGIC(sv) = remagic->mg;
+	SvFLAGS(sv) |= remagic->flags;
 	SvREFCNT_dec_NN(sv);
 	remagic->sv = NULL;
 	return pv;
 }
 #endif /* !SvPV_nomg */
+
+#ifndef START_MY_CXT
+# ifdef PERL_IMPLICIT_CONTEXT
+#  define START_MY_CXT
+#  define dMY_CXT_SV \
+	SV *my_cxt_sv = *hv_fetch(PL_modglobal, \
+				MY_CXT_KEY, sizeof(MY_CXT_KEY)-1, 1)
+#  define dMY_CXT \
+	dMY_CXT_SV; my_cxt_t *my_cxtp = INT2PTR(my_cxt_t*, SvUV(my_cxt_sv))
+#  define MY_CXT_INIT \
+	dMY_CXT_SV; \
+	my_cxt_t *my_cxtp = (my_cxt_t*)SvPVX(newSV(sizeof(my_cxt_t)-1)); \
+	Zero(my_cxtp, 1, my_cxt_t); \
+	sv_setuv(my_cxt_sv, PTR2UV(my_cxtp))
+#  define MY_CXT (*my_cxtp)
+#  define pMY_CXT my_cxt_t *my_cxtp
+#  define pMY_CXT_ pMY_CXT,
+#  define _pMY_CXT ,pMY_CXT
+#  define aMY_CXT my_cxtp
+#  define aMY_CXT_ aMY_CXT,
+#  define _aMY_CXT ,aMY_CXT
+# else /* !PERL_IMPLICIT_CONTEXT */
+#  define START_MY_CXT static my_cxt_t my_cxt;
+#  define dMY_CXT dNOOP
+#  define MY_CXT_INIT NOOP
+#  define MY_CXT my_cxt
+#  define pMY_CXT void
+#  define pMY_CXT_ /**/
+#  define _pMY_CXT /**/
+#  define aMY_CXT /**/
+#  define aMY_CXT_ /**/
+#  define _aMY_CXT /**/
+# endif /* !PERL_IMPLICIT_CONTEXT */
+#endif /* !START_MY_CXT */
+
+#ifndef MY_CXT_CLONE
+# ifdef PERL_IMPLICIT_CONTEXT
+#  define MY_CXT_CLONE \
+	dMY_CXT_SV; \
+	my_cxt_t *my_cxtp = (my_cxt_t*)SvPVX(newSV(sizeof(my_cxt_t)-1)); \
+	Copy(INT2PTR(my_cxt_t*, SvUV(my_cxt_sv)), my_cxtp, 1, my_cxt_t); \
+	sv_setuv(my_cxt_sv, PTR2UV(my_cxtp))
+# else /* !PERL_IMPLICIT_CONTEXT */
+#  define MY_CXT_CLONE NOOP
+# endif /* !PERL_IMPLICIT_CONTEXT */
+#endif /* !MY_CXT_CLONE */
 
 #if PERL_VERSION_GE(5,19,4)
 typedef SSize_t tmps_ix_t;
@@ -316,6 +331,19 @@ typedef U64TYPE U64;
 	(!sv_is_glob(sv) && !sv_is_regexp(sv) && \
 	 (SvFLAGS(sv) & (SVf_IOK|SVf_NOK|SVf_POK|SVp_IOK|SVp_NOK|SVp_POK)))
 
+/* we need mg_dup to be invoked *after* duplicating a scalar's PV */
+#define QCORE_MG_DUP_WORKS \
+	((PERL_VERSION_GE(5,8,9) && !PERL_VERSION_GE(5,9,0)) || \
+	 PERL_VERSION_GE(5,9,3))
+
+#ifndef QWITH_DUP
+# if QCORE_MG_DUP_WORKS && defined(USE_ITHREADS)
+#  define QWITH_DUP 1
+# else /* !(QCORE_MG_DUP_WORKS && USE_ITHREADS) */
+#  define QWITH_DUP 0
+# endif /* !(QCORE_MG_DUP_WORKS && USE_ITHREADS) */
+#endif /* !QWITH_DUP */
+
 /* system call compatibility */
 
 #ifndef MAP_FAILED
@@ -326,23 +354,116 @@ typedef U64TYPE U64;
 # define FD_CLOEXEC 1
 #endif /* !FD_CLOEXEC */
 
+/* byte definition */
+
+#define BYTE_NBIT 8
+
+typedef U8 byte;
+#define BYTE_MAX 0xff
+
+/* word definition */
+
+#define WORD_SZ_LOG2 3
+#define WORD_SZ (1<<WORD_SZ_LOG2)
+#define WORD_ALIGN_BITS (WORD_SZ-1)
+#define IS_WORD_ALIGNED(v) (!((v) & WORD_ALIGN_BITS))
+#define WORD_ALIGN(v) (((v) + WORD_ALIGN_BITS) & ~WORD_ALIGN_BITS)
+
+#define WORD_NBIT (BYTE_NBIT << WORD_SZ_LOG2)
+
+typedef U64 word;
+#define WORD_C UINT64_C
+enum { ASSERT_WORD_SIZE = 1/(!!(sizeof(word) == (1<<WORD_SZ_LOG2))) };
+#define WORD_MAX WORD_C(0xffffffffffffffff)
+
+/*
+ * memory dereferencing
+ *
+ * BYTE_AT() and WORD_AT() are syntactic sugar for working with offsets
+ * into memory maps.
+ *
+ * word_cset() is an atomic compare-and-set operator on words, ordered
+ * relative to other memory operations.  There's no standard C to
+ * implement this.  Currently the only implementation used is the
+ * Intel-specified compiler built-in __sync_bool_compare_and_swap(),
+ * as implemented by gcc and other compilers.
+ *
+ * word_get() is intended to provide matching atomic reading of a mutable
+ * word, ordered relative to other memory operations.  However, the C
+ * language (even with gcc extensions) doesn't actually provide a way
+ * to guarantee that a read is atomic.  This implementation, using a
+ * "volatile" qualifier, ensures that the operation is a memory barrier,
+ * but doesn't guarantee atomicity.  We must hope that the compiler uses
+ * a native atomic read instruction.
+ */
+
+#define BYTE_AT(base, offset) (*(byte*)(((char*)(base))+(offset)))
+#define WORD_AT(base, offset) (*(word*)(((char*)(base))+(offset)))
+
+PERL_STATIC_INLINE word word_get(word const *ptr)
+{
+	return *(word const volatile *)ptr;
+}
+
+#define word_cset __sync_bool_compare_and_swap
+
+/*
+ * thread-safe reference counting
+ *
+ * This reference counting is used when sharing objects between threads
+ * due to spawning a thread requiring duplication of all objects the
+ * parent thread can reference.  It's used for directory references and
+ * memory mappings.
+ *
+ * The value that's physically stored for the reference count is 1
+ * less than the actual number of live references.  The word should be
+ * initialised to all-bits-zero (representing having a single reference).
+ * If the reference count word grows to all-bits-one, rather than wrap
+ * it will stick, preferring to leak the object rather than prematurely
+ * free it.
+ */
+
+#if QWITH_DUP
+
+PERL_STATIC_INLINE void threadrc_inc(word *rcp)
+{
+	while(1) {
+		word rc = word_get(rcp);
+		if(unlikely(rc == ~(word)0)) break;
+		if(likely(word_cset(rcp, rc, rc+1))) break;
+	}
+}
+
+PERL_STATIC_INLINE bool threadrc_dec(word *rcp)
+{
+	while(1) {
+		word rc = word_get(rcp);
+		if(likely(rc == 0)) return 0;
+		if(unlikely(rc == ~(word)0)) return 1;
+		if(likely(word_cset(rcp, rc, rc-1))) return 1;
+	}
+}
+
+#endif /* QWITH_DUP */
+
 /*
  * opening with close-on-exec flag
  *
  * When we open file descriptors, we always want the close-on-exec flag
- * set.  Ideally we'd use the thread-safe (and convenient) O_CLOEXEC,
- * but that's not available everywhere.  So the wrappers open_cloexec()
- * and openat_cloexec() encapsulate the job of setting the close-on-exec
- * flag in the best manner possible.
+ * set.  Ideally we'd use the thread-safe (and convenient) O_CLOEXEC and
+ * F_DUPFD_CLOEXEC, but they're not available everywhere.  So the wrappers
+ * open_cloexec(), openat_cloexec(), and dup_cloexec() encapsulate the
+ * job of setting the close-on-exec flag in the best manner possible.
  *
- * Even if the headers define O_CLOEXEC, it might not actually
- * be implemented in the kernel at runtime.  So it is necessary to
- * experiment at runtime to see how to actually get the close-on-exec
+ * Even if the headers define O_CLOEXEC/F_DUPFD_CLOEXEC, it might not
+ * actually be implemented in the kernel at runtime.  So it is necessary
+ * to experiment at runtime to see how to actually get the close-on-exec
  * flag set.  The experiment is run on the first attempts at opening.
- * Experimentation is performed separately for open(2) and openat(2).
- * In any sensible system they'll have identical treatment of the flags,
- * but it's unwise to rely on sensibleness.  We do rely on each syscall
- * being consistent over time, within the scope of a single program run.
+ * Experimentation is performed separately for open(2), openat(2),
+ * and fcntl(2)/F_DUPFD_CLOEXEC.  In any sensible system open(2) and
+ * openat(2) will have identical treatment of the flags, but it's unwise
+ * to rely on sensibleness.  We do rely on each syscall being consistent
+ * over time, within the scope of a single program run.
  *
  * Kernels that don't support O_CLOEXEC can't be relied upon to object
  * if it's supplied.  Linux, for example, ignores open(2) flags that
@@ -363,50 +484,62 @@ enum {
 	CLOEXEC_AT_AND_AFTER_OPEN
 };
 
+static int cloexec_determine_strategy(int fd)
+{
+	int fdflags = fcntl(fd, F_GETFD);
+	if(unlikely(fdflags == -1)) {
+		(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
+		return CLOEXEC_AT_AND_AFTER_OPEN;
+	} else if(likely(fdflags & FD_CLOEXEC)) {
+		return CLOEXEC_AT_OPEN;
+	} else {
+		(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
+		return CLOEXEC_AFTER_OPEN;
+	}
+}
+
+#define DO_EXPERIMENTING_CLOEXEC(OPEN_WITH) \
+	do { \
+		static int strategy = CLOEXEC_EXPERIMENT; \
+		switch(strategy) { \
+			case CLOEXEC_EXPERIMENT: default: { \
+				int fd = OPEN_WITH; \
+				if(unlikely(fd == -1)) { \
+					if(unlikely(errno == EINVAL)) { \
+						strategy = CLOEXEC_AFTER_OPEN; \
+						goto after_open; \
+					} \
+					return -1; \
+				} \
+				strategy = cloexec_determine_strategy(fd); \
+				return fd; \
+			} \
+			case CLOEXEC_AT_OPEN: { \
+				return OPEN_WITH; \
+			} \
+			case CLOEXEC_AFTER_OPEN: after_open: break; \
+			case CLOEXEC_AT_AND_AFTER_OPEN: { \
+				int fd = OPEN_WITH; \
+				if(likely(fd != -1)) \
+					(void) fcntl(fd, F_SETFD, FD_CLOEXEC); \
+				return fd; \
+			} \
+		} \
+	} while(0)
+
+#define DO_CLOEXEC_AFTER_OPEN(OPEN_WITHOUT) \
+	do { \
+		int fd = OPEN_WITHOUT; \
+		if(likely(fd != -1)) (void) fcntl(fd, F_SETFD, FD_CLOEXEC); \
+		return fd; \
+	} while(0)
+
 static int open_cloexec(char const *path, int flags, mode_t mode)
 {
 #ifdef O_CLOEXEC
-	static int strategy = CLOEXEC_EXPERIMENT;
-	switch(strategy) {
-		case CLOEXEC_EXPERIMENT: default: {
-			int fd, fdflags;
-			fd = open(path, flags | O_CLOEXEC, mode);
-			if(unlikely(fd == -1)) {
-				if(unlikely(errno == EINVAL)) {
-					strategy = CLOEXEC_AFTER_OPEN;
-					goto after_open;
-				}
-				return -1;
-			}
-			fdflags = fcntl(fd, F_GETFD);
-			if(unlikely(fdflags == -1)) {
-				strategy = CLOEXEC_AT_AND_AFTER_OPEN;
-				(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-			} else if(likely(fdflags & FD_CLOEXEC)) {
-				strategy = CLOEXEC_AT_OPEN;
-			} else {
-				strategy = CLOEXEC_AFTER_OPEN;
-				(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-			}
-			return fd;
-		}
-		case CLOEXEC_AT_OPEN: {
-			return open(path, flags | O_CLOEXEC, mode);
-		}
-		case CLOEXEC_AFTER_OPEN: after_open: break;
-		case CLOEXEC_AT_AND_AFTER_OPEN: {
-			int fd = open(path, flags | O_CLOEXEC, mode);
-			if(likely(fd != -1))
-				(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-			return fd;
-		}
-	}
+	DO_EXPERIMENTING_CLOEXEC(open(path, flags | O_CLOEXEC, mode));
 #endif /* O_CLOEXEC */
-	{
-		int fd = open(path, flags, mode);
-		if(likely(fd != -1)) (void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-		return fd;
-	}
+	DO_CLOEXEC_AFTER_OPEN(open(path, flags, mode));
 }
 
 #if QHAVE_OPENAT && QHAVE_FSTATAT && QHAVE_LINKAT && QHAVE_UNLINKAT && \
@@ -414,47 +547,20 @@ static int open_cloexec(char const *path, int flags, mode_t mode)
 static int openat_cloexec(int dirfd, char const *path, int flags, mode_t mode)
 {
 # ifdef O_CLOEXEC
-	static int strategy = CLOEXEC_EXPERIMENT;
-	switch(strategy) {
-		case CLOEXEC_EXPERIMENT: default: {
-			int fd, fdflags;
-			fd = openat(dirfd, path, flags | O_CLOEXEC, mode);
-			if(unlikely(fd == -1)) {
-				if(unlikely(errno == EINVAL)) {
-					strategy = CLOEXEC_AFTER_OPEN;
-					goto after_open;
-				}
-				return -1;
-			}
-			fdflags = fcntl(fd, F_GETFD);
-			if(unlikely(fdflags == -1)) {
-				strategy = CLOEXEC_AT_AND_AFTER_OPEN;
-				(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-			} else if(likely(fdflags & FD_CLOEXEC)) {
-				strategy = CLOEXEC_AT_OPEN;
-			} else {
-				strategy = CLOEXEC_AFTER_OPEN;
-				(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-			}
-			return fd;
-		}
-		case CLOEXEC_AT_OPEN: {
-			return openat(dirfd, path, flags | O_CLOEXEC, mode);
-		}
-		case CLOEXEC_AFTER_OPEN: after_open: break;
-		case CLOEXEC_AT_AND_AFTER_OPEN: {
-			int fd = openat(dirfd, path, flags | O_CLOEXEC, mode);
-			if(likely(fd != -1))
-				(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-			return fd;
-		}
-	}
+	DO_EXPERIMENTING_CLOEXEC(openat(dirfd, path, flags | O_CLOEXEC, mode));
 # endif /* O_CLOEXEC */
-	{
-		int fd = openat(dirfd, path, flags, mode);
-		if(likely(fd != -1)) (void) fcntl(fd, F_SETFD, FD_CLOEXEC);
-		return fd;
-	}
+	DO_CLOEXEC_AFTER_OPEN(openat(dirfd, path, flags, mode));
+}
+#endif
+
+#if QHAVE_OPENAT && QHAVE_FSTATAT && QHAVE_LINKAT && QHAVE_UNLINKAT && \
+	QHAVE_FDOPENDIR && !QWITH_DUP
+PERL_STATIC_INLINE int dup_cloexec(int oldfd)
+{
+# ifdef F_DUPFD_CLOEXEC
+	DO_EXPERIMENTING_CLOEXEC(fcntl(oldfd, F_DUPFD_CLOEXEC, 0));
+# endif /* F_DUPFD_CLOEXEC */
+	DO_CLOEXEC_AFTER_OPEN(dup(oldfd));
 }
 #endif
 
@@ -486,8 +592,35 @@ static int openat_cloexec(int dirfd, char const *path, int flags, mode_t mode)
  * such that calls to them don't compile, then instead of experimenting
  * we statically use only the backup system.
  *
+ * In threaded builds we need to duplicate directory references
+ * between threads.  A pathname-based directory reference could be
+ * easily duplicated by copying the name structure.  A descriptor-based
+ * directory reference is trickier.  We could dup(2) the file descriptor,
+ * but that can fail, and the ability to handle errors during thread
+ * cloning is very limited.  The file descriptor limit could be a problem
+ * in a program that uses a lot of threads, and for short-lived threads
+ * we'd rather avoid the system call overhead.  So instead we share the
+ * file descriptor between threads.  This is done by putting the file
+ * descriptor in a structure with a reference count, which is maintained
+ * using thread-safe atomic operators.  In fact we use the same reference
+ * counting scheme with pathname-based directory references, to avoid
+ * having to allocate new memory upon duplication.
+ *
  * The functions here provide a syscall-like interface.  Errors are
  * signalled in errno.
+ *
+ * To handle directory references that could be either a pointer or an
+ * immediate integer, dirref_t is an integer type that is both at least as
+ * large as int and at least large enough to store a pointer.  Nasty casts
+ * are required for the pointer case.  For efficiency of use, a null
+ * directory reference is always a zero value, and zeroing memory can be
+ * relied upon to yield a null reference.  Where directory references are
+ * immediate integer file descriptors, fd 0 must therefore be avoided.
+ * In the unlikely event that opening a directory reference yields fd 0,
+ * it will be dup(2)ed to a different value.  (Zero could instead have
+ * been reserved for nullity by incrementing the fd value for dirref_t,
+ * but that would make common operations using the directory reference
+ * slightly more expensive.)
  */
 
 #if QHAVE_OPENAT && QHAVE_FSTATAT && QHAVE_LINKAT && QHAVE_UNLINKAT && \
@@ -497,18 +630,39 @@ static int openat_cloexec(int dirfd, char const *path, int flags, mode_t mode)
 # define QMAY_DIRREF_BY_FD 0
 #endif
 
+#if QMAY_DIRREF_BY_FD && QWITH_DUP
+struct dirref_by_fd {
+	word rc;   /* must be first in struct: see dirref_dup() */
+	int fd;
+};
+#endif /* QMAY_DIRREF_BY_FD && QWITH_DUP */
+
 struct dirref_by_name {
+#if QWITH_DUP
+	word rc;   /* must be first in struct: see dirref_dup() */
+#endif /* QWITH_DUP */
 	ino_t ino;
 	dev_t dev;
 	char name[1]; /* struct hack */
 };
 
-typedef union {
+#if PTRSIZE <= INTSIZE
+typedef unsigned dirref_t;
+#elif PTRSIZE <= LONGSIZE
+typedef unsigned long dirref_t;
+#elif defined(HAS_LONG_LONG) && PTRSIZE <= LONGLONGSIZE
+typedef unsigned long long dirref_t;
+#else /* PTRSIZE > LONGLONGSIZE */
+typedef UV dirref_t;
+#endif /* PTRSIZE > LONGLONGSIZE */
+
 #if QMAY_DIRREF_BY_FD
-	int fd;
+# if QWITH_DUP
+#  define DIRREF_BYFD_FD(dr) (NUM2PTR(struct dirref_by_fd *, (dr)))->fd
+# else /* !QWITH_DUP */
+#  define DIRREF_BYFD_FD(dr) ((int)(dr))
+# endif /* !QWITH_DUP */
 #endif /* QMAY_DIRREF_BY_FD */
-	struct dirref_by_name *byname;
-} dirref_t;
 
 #if QMAY_DIRREF_BY_FD
 enum {
@@ -557,30 +711,11 @@ PERL_STATIC_INLINE bool dirref_referential(void)
 #endif /* !QMAY_DIRREF_BY_FD */
 }
 
-PERL_STATIC_INLINE dirref_t dirref_null(void)
-{
-	dirref_t null_dirref;
-#if QMAY_DIRREF_BY_FD
-	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		null_dirref.fd = -1;
-	} else
-#endif /* QMAY_DIRREF_BY_FD */
-	{
-		null_dirref.byname = NULL;
-	}
-	return null_dirref;
-}
+#define dirref_null() ((dirref_t)0)
 
 PERL_STATIC_INLINE bool dirref_is_null(dirref_t dirref)
 {
-#if QMAY_DIRREF_BY_FD
-	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		return dirref.fd == -1;
-	} else
-#endif /* QMAY_DIRREF_BY_FD */
-	{
-		return !dirref.byname;
-	}
+	return dirref == dirref_null();
 }
 
 static char *dirref_path_concat(char const *base, char const *rel)
@@ -606,27 +741,52 @@ static char *dirref_path_concat(char const *base, char const *rel)
 
 static dirref_t dirref_open(char const *origname, struct stat *st)
 {
-	dirref_t dirref;
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		dirref.fd = open_cloexec(origname, O_RDONLY, 0);
-		if(likely(dirref.fd != -1) &&
-				unlikely(fstat(dirref.fd, st) == -1)) {
+		int fd = open_cloexec(origname, O_RDONLY, 0);
+		if(likely(fd != -1) && unlikely(fstat(fd, st) == -1)) {
 			int er = errno;
-			(void) close(dirref.fd);
+			(void) close(fd);
 			errno = er;
-			dirref.fd = -1;
+			fd = -1;
 		}
-		return dirref;
+# if QWITH_DUP
+		if(unlikely(fd == -1)) {
+			return dirref_null();
+		} else {
+			struct dirref_by_fd *byfd;
+			byfd = malloc(sizeof(struct dirref_by_fd));
+			if(!likely(byfd)) {
+				(void) close(fd);
+				errno = ENOMEM;
+				return dirref_null();
+			}
+			byfd->rc = 0;
+			byfd->fd = fd;
+			return NUM2PTR(dirref_t, byfd);
+		}
+# else /* !QWITH_DUP */
+		if(unlikely(fd == 0)) {
+			int er;
+			fd = dup_cloexec(fd);
+			er = errno;
+			(void) close(0);
+			errno = er;
+		}
+		return unlikely(fd == -1) ? dirref_null() : (dirref_t)fd;
+# endif /* !QWITH_DUP */
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
 		char *fullname;
 		size_t fullname_len, byname_len;
 		bool free_fullname;
-		if(unlikely(stat(origname, st) == -1)) goto error;
+		struct dirref_by_name *byname;
 #if QHAVE_REALPATH
 		long pmax;
+#endif /* QHAVE_REALPATH */
+		if(unlikely(stat(origname, st) == -1)) return dirref_null();
+#if QHAVE_REALPATH
 # if QHAVE_PATHCONF && defined(_PC_PATH_MAX)
 		pmax = pathconf(".", _PC_PATH_MAX);
 		if(unlikely(pmax == -1))
@@ -647,7 +807,7 @@ static dirref_t dirref_open(char const *origname, struct stat *st)
 			int er = errno;
 			free(fullname);
 			errno = er;
-			goto error;
+			return dirref_null();
 		}
 		free_fullname = 1;
 #elif QHAVE_GETCWD
@@ -668,7 +828,7 @@ static dirref_t dirref_open(char const *origname, struct stat *st)
 					int er = errno;
 					free(cwd);
 					errno = er;
-					goto error;
+					return dirref_null();
 				}
 				bufsz <<= 2;
 				if(!likely(bufsz)) goto enomem_free_cwd;
@@ -696,29 +856,61 @@ static dirref_t dirref_open(char const *origname, struct stat *st)
 			if(free_fullname) free(fullname);
 			enomem:
 			errno = ENOMEM;
-			error:
-			dirref.byname = NULL;
-			return dirref;
+			return dirref_null();
 		}
-		dirref.byname = malloc(byname_len);
-		if(!likely(dirref.byname)) goto enomem_maybe_free_fullname;
-		dirref.byname->dev = st->st_dev;
-		dirref.byname->ino = st->st_ino;
-		(void) memcpy(dirref.byname->name, fullname, fullname_len+1);
+		byname = malloc(byname_len);
+		if(!likely(byname)) goto enomem_maybe_free_fullname;
+#if QWITH_DUP
+		byname->rc = 0;
+#endif /* QWITH_DUP */
+		byname->dev = st->st_dev;
+		byname->ino = st->st_ino;
+		(void) memcpy(byname->name, fullname, fullname_len+1);
 		if(free_fullname) free(fullname);
-		return dirref;
+		return NUM2PTR(dirref_t, byname);
 	}
 }
 
+#if QWITH_DUP
+PERL_STATIC_INLINE dirref_t dirref_dup(dirref_t dirref)
+{
+	if(unlikely(dirref_is_null(dirref))) return dirref;
+	/*
+	 * This code doesn't look at whether the directory reference is
+	 * by fd or by name.  It relies on the reference count being
+	 * in the same place in both structures, which is achieved by
+	 * putting it at the beginning of both.
+	 */
+	threadrc_inc(&(NUM2PTR(struct dirref_by_name *, dirref))->rc);
+	return dirref;
+}
+#endif /* QWITH_DUP */
+
 PERL_STATIC_INLINE void dirref_close(dirref_t dirref)
 {
+#if QWITH_DUP
+	/*
+	 * Like dirref_dup(), this doesn't distinguish the types of
+	 * directory reference when manipulating the reference count.
+	 */
+	if(unlikely(threadrc_dec(
+			&(NUM2PTR(struct dirref_by_name *, dirref))->rc)))
+		return;
+#endif /* QWITH_DUP */
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		(void) close(dirref.fd);
+# if QWITH_DUP
+		struct dirref_by_fd *byfd =
+			NUM2PTR(struct dirref_by_fd *, dirref);
+		(void) close(byfd->fd);
+		free(byfd);
+# else /* !QWITH_DUP */
+		(void) close((int)dirref);
+# endif /* !QWITH_DUP */
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
-		free(dirref.byname);
+		free(NUM2PTR(struct dirref_by_name *, dirref));
 	}
 }
 
@@ -738,12 +930,13 @@ static bool dirref_byname_ok(struct dirref_by_name *byname)
 	}
 }
 
-PERL_STATIC_INLINE DIR *dirref_at_opendir(dirref_t dirref)
+PERL_STATIC_INLINE DIR *dirref_dir_opendir(dirref_t dirref)
 {
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
 		DIR *dirh;
-		int fd = openat_cloexec(dirref.fd, ".", O_RDONLY, 0);
+		int fd = openat_cloexec(DIRREF_BYFD_FD(dirref), ".",
+					O_RDONLY, 0);
 		if(unlikely(fd == -1)) return NULL;
 		dirh = fdopendir(fd);
 		if(!likely(dirh)) {
@@ -755,25 +948,29 @@ PERL_STATIC_INLINE DIR *dirref_at_opendir(dirref_t dirref)
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
-		if(!likely(dirref_byname_ok(dirref.byname))) return NULL;
-		return opendir(dirref.byname->name);
+		struct dirref_by_name *byname =
+			NUM2PTR(struct dirref_by_name *, dirref);
+		if(!likely(dirref_byname_ok(byname))) return NULL;
+		return opendir(byname->name);
 	}
 }
 
-static int dirref_via_open_cloexec(dirref_t dirref, char const *rel,
+static int dirref_rel_open_cloexec(dirref_t dirref, char const *rel,
 	int flags, mode_t mode)
 {
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		return openat_cloexec(dirref.fd, rel, flags, mode);
+		return openat_cloexec(DIRREF_BYFD_FD(dirref), rel, flags, mode);
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
+		struct dirref_by_name *byname =
+			NUM2PTR(struct dirref_by_name *, dirref);
 		char *path;
 		int res, er;
-		path = dirref_path_concat(dirref.byname->name, rel);
+		path = dirref_path_concat(byname->name, rel);
 		if(!likely(path)) return -1;
-		res = !likely(dirref_byname_ok(dirref.byname)) ? -1 :
+		res = !likely(dirref_byname_ok(byname)) ? -1 :
 			open_cloexec(path, flags, mode);
 		er = errno;
 		free(path);
@@ -782,21 +979,22 @@ static int dirref_via_open_cloexec(dirref_t dirref, char const *rel,
 	}
 }
 
-PERL_STATIC_INLINE int dirref_via_stat(dirref_t dirref, char const *rel,
+PERL_STATIC_INLINE int dirref_rel_stat(dirref_t dirref, char const *rel,
 	struct stat *st)
 {
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		return fstatat(dirref.fd, rel, st, 0);
+		return fstatat(DIRREF_BYFD_FD(dirref), rel, st, 0);
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
+		struct dirref_by_name *byname =
+			NUM2PTR(struct dirref_by_name *, dirref);
 		char *path;
 		int res, er;
-		path = dirref_path_concat(dirref.byname->name, rel);
+		path = dirref_path_concat(byname->name, rel);
 		if(!likely(path)) return -1;
-		res = !likely(dirref_byname_ok(dirref.byname)) ? -1 :
-			stat(path, st);
+		res = !likely(dirref_byname_ok(byname)) ? -1 : stat(path, st);
 		er = errno;
 		free(path);
 		errno = er;
@@ -804,26 +1002,29 @@ PERL_STATIC_INLINE int dirref_via_stat(dirref_t dirref, char const *rel,
 	}
 }
 
-PERL_STATIC_INLINE int dirref_via_link(dirref_t dirref, char const *oldrel,
+PERL_STATIC_INLINE int dirref_rel_link(dirref_t dirref, char const *oldrel,
 	char const *newrel)
 {
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		return linkat(dirref.fd, oldrel, dirref.fd, newrel, 0);
+		return linkat(DIRREF_BYFD_FD(dirref), oldrel,
+				DIRREF_BYFD_FD(dirref), newrel, 0);
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
+		struct dirref_by_name *byname =
+			NUM2PTR(struct dirref_by_name *, dirref);
 		char *oldpath, *newpath;
 		int res, er;
-		oldpath = dirref_path_concat(dirref.byname->name, oldrel);
+		oldpath = dirref_path_concat(byname->name, oldrel);
 		if(!likely(oldpath)) return -1;
-		newpath = dirref_path_concat(dirref.byname->name, newrel);
+		newpath = dirref_path_concat(byname->name, newrel);
 		if(!likely(newpath)) {
 			free(oldpath);
 			errno = ENOMEM;
 			return -1;
 		}
-		res = !likely(dirref_byname_ok(dirref.byname)) ? -1 :
+		res = !likely(dirref_byname_ok(byname)) ? -1 :
 			link(oldpath, newpath);
 		er = errno;
 		free(oldpath);
@@ -833,20 +1034,21 @@ PERL_STATIC_INLINE int dirref_via_link(dirref_t dirref, char const *oldrel,
 	}
 }
 
-static int dirref_via_unlink(dirref_t dirref, char const *rel)
+static int dirref_rel_unlink(dirref_t dirref, char const *rel)
 {
 #if QMAY_DIRREF_BY_FD
 	if(likely(dirref_strategy == DIRREF_BY_FD)) {
-		return unlinkat(dirref.fd, rel, 0);
+		return unlinkat(DIRREF_BYFD_FD(dirref), rel, 0);
 	} else
 #endif /* QMAY_DIRREF_BY_FD */
 	{
+		struct dirref_by_name *byname =
+			NUM2PTR(struct dirref_by_name *, dirref);
 		char *path;
 		int res, er;
-		path = dirref_path_concat(dirref.byname->name, rel);
+		path = dirref_path_concat(byname->name, rel);
 		if(!likely(path)) return -1;
-		res = !likely(dirref_byname_ok(dirref.byname)) ? -1 :
-			unlink(path);
+		res = !likely(dirref_byname_ok(byname)) ? -1 : unlink(path);
 		er = errno;
 		free(path);
 		errno = er;
@@ -928,7 +1130,7 @@ static void THX_unlinkfile_cleanup(pTHX_ void *par_p_v)
 	struct unlinkfile_cleanup_par *par_p = par_p_v;
 	dirref_t dir = par_p->dir;
 	if(!likely(dirref_is_null(dir)))
-		(void) dirref_via_unlink(dir, par_p->filename);
+		(void) dirref_rel_unlink(dir, par_p->filename);
 	Safefree(par_p_v);
 }
 
@@ -956,13 +1158,13 @@ PERL_STATIC_INLINE void THX_unlinkfile_cancel(pTHX_
 }
 
 #define unlinkfile_early(par_p) THX_unlinkfile_early(aTHX_ par_p)
-static void THX_unlinkfile_early(pTHX_ struct unlinkfile_cleanup_par *par_p)
+PERL_STATIC_INLINE int THX_unlinkfile_early(pTHX_
+	struct unlinkfile_cleanup_par *par_p)
 {
 	dirref_t dir = par_p->dir;
-	if(likely(!dirref_is_null(dir))) {
-		par_p->dir = dirref_null();
-		(void) dirref_via_unlink(dir, par_p->filename);
-	}
+	if(unlikely(dirref_is_null(dir))) return 0;
+	par_p->dir = dirref_null();
+	return dirref_rel_unlink(dir, par_p->filename);
 }
 
 typedef struct unlinkfile_cleanup_par *unlinkfile_ref_t;
@@ -1051,27 +1253,59 @@ static struct pvl THX_pvl_from_arg(pTHX_ char const *role, bool allow_undef,
 	return pvl;
 }
 
-/* byte definition */
+/*
+ * event counter enumeration
+ *
+ * See the "event counters" section below.  These need to be defined
+ * early to feed into the MY_CXT definition below.
+ */
 
-#define BYTE_NBIT 8
+#if QWITH_TALLY
 
-typedef U8 byte;
-#define BYTE_MAX 0xff
+enum {
+	K_STRING_READ,
+	K_STRING_WRITE,
+	K_BNODE_READ,
+	K_BNODE_WRITE,
+	K_KEY_COMPARE,
+	K_ROOT_CHANGE_ATTEMPT,
+	K_ROOT_CHANGE_SUCCESS,
+	K_FILE_CHANGE_ATTEMPT,
+	K_FILE_CHANGE_SUCCESS,
+	K_DATA_READ_OP,
+	K_DATA_WRITE_OP,
+	K_SZ
+};
 
-/* word definition */
+static char const * const tally_name_pv[K_SZ] = {
+	"string_read",
+	"string_write",
+	"bnode_read",
+	"bnode_write",
+	"key_compare",
+	"root_change_attempt",
+	"root_change_success",
+	"file_change_attempt",
+	"file_change_success",
+	"data_read_op",
+	"data_write_op",
+};
 
-#define WORD_SZ_LOG2 3
-#define WORD_SZ (1<<WORD_SZ_LOG2)
-#define WORD_ALIGN_BITS (WORD_SZ-1)
-#define IS_WORD_ALIGNED(v) (!((v) & WORD_ALIGN_BITS))
-#define WORD_ALIGN(v) (((v) + WORD_ALIGN_BITS) & ~WORD_ALIGN_BITS)
+#endif /* QWITH_TALLY */
 
-#define WORD_NBIT (BYTE_NBIT << WORD_SZ_LOG2)
+/*
+ * per-thread data
+ */
 
-typedef U64 word;
-#define WORD_C UINT64_C
-enum { ASSERT_WORD_SIZE = 1/(!!(sizeof(word) == (1<<WORD_SZ_LOG2))) };
-#define WORD_MAX WORD_C(0xffffffffffffffff)
+#define MY_CXT_KEY "Hash::SharedMem::_guts"XS_VERSION
+typedef struct {
+	HV *sizes_table;
+	HV *shash_handle_stash;
+#if QWITH_TALLY
+	SV *tally_name_sv[K_SZ];
+#endif /* QWITH_TALLY */
+} my_cxt_t;
+START_MY_CXT
 
 /*
  * fanout limit
@@ -1079,15 +1313,9 @@ enum { ASSERT_WORD_SIZE = 1/(!!(sizeof(word) == (1<<WORD_SZ_LOG2))) };
  * This parameter is currently fixed at compile time.  The value 15 is the
  * result of an experiment with an amd64 system.  (Perhaps it is a sweet
  * spot due to node buffers coming in just under a power of two size.)
- *
- * FUTURE: should experiment with MAXSPLAY on more systems, to come up
- * with a formula that optimises it more widely.
- *
- * FUTURE: this parameter could be treated as a variable, to make it
- * possible to read files written by systems using other values.
  */
 
-#define MAXSPLAY 15
+#define MAXFANOUT 15
 
 /*
  * parameter word
@@ -1095,18 +1323,13 @@ enum { ASSERT_WORD_SIZE = 1/(!!(sizeof(word) == (1<<WORD_SZ_LOG2))) };
  * Variable aspects of the file format are encapsulated in a word quantity
  * that is included in file headers.  Some of the parameters are currently
  * fixed at compile time, and others are runtime variable.
- *
- * FUTURE: if there is any change in the file formats, it should be
- * indicated by setting flags or changing a version number in the
- * parameter word.  ext2's concept of readonly-compatible changes may
- * be useful.
  */
 
-#if MAXSPLAY < 3 || MAXSPLAY >= BYTE_MAX || !(MAXSPLAY & 1)
- #error bad parameter: splay limit unacceptable
-#endif /* MAXSPLAY < 3 || MAXSPLAY >= BYTE_MAX || !(MAXSPLAY & 1) */
+#if MAXFANOUT < 3 || MAXFANOUT >= BYTE_MAX || !(MAXFANOUT & 1)
+ #error bad parameter: fanout limit unacceptable
+#endif /* MAXFANOUT < 3 || MAXFANOUT >= BYTE_MAX || !(MAXFANOUT & 1) */
 
-#define PARAMETER_WORD_FIXED_PART_VALUE (MAXSPLAY<<16)
+#define PARAMETER_WORD_FIXED_PART_VALUE (MAXFANOUT<<16)
 
 #define PARAMETER_WORD(lsl, psl) \
 	(((word)(lsl)) | (((word)psl)<<8) | PARAMETER_WORD_FIXED_PART_VALUE)
@@ -1118,9 +1341,9 @@ enum { ASSERT_WORD_SIZE = 1/(!!(sizeof(word) == (1<<WORD_SZ_LOG2))) };
 PERL_STATIC_INLINE int llog2(long v)
 {
 	int g;
-	if(v <= 0) return -1;
+	if(unlikely(v <= 0)) return -1;
 	for(g = 0; !(v & 1); g++) v >>= 1;
-	return v == 1 ? g : -1;
+	return likely(v == 1) ? g : -1;
 }
 
 PERL_STATIC_INLINE int parameter_known_line_size_log2(void)
@@ -1129,19 +1352,19 @@ PERL_STATIC_INLINE int parameter_known_line_size_log2(void)
 	int h = -1, l;
 # ifdef _SC_LEVEL1_DCACHE_LINESIZE
 	l = llog2(sysconf(_SC_LEVEL1_DCACHE_LINESIZE));
-	if(l > h) h = l;
+	if(likely(l > h)) h = l;
 # endif /* _SC_LEVEL1_DCACHE_LINESIZE */
 # ifdef _SC_LEVEL2_CACHE_LINESIZE
 	l = llog2(sysconf(_SC_LEVEL2_CACHE_LINESIZE));
-	if(l > h) h = l;
+	if(unlikely(l > h)) h = l;
 # endif /* _SC_LEVEL2_DCACHE_LINESIZE */
 # ifdef _SC_LEVEL3_CACHE_LINESIZE
 	l = llog2(sysconf(_SC_LEVEL3_CACHE_LINESIZE));
-	if(l > h) h = l;
+	if(unlikely(l > h)) h = l;
 # endif /* _SC_LEVEL3_DCACHE_LINESIZE */
 # ifdef _SC_LEVEL4_CACHE_LINESIZE
 	l = llog2(sysconf(_SC_LEVEL4_CACHE_LINESIZE));
-	if(l > h) h = l;
+	if(unlikely(l > h)) h = l;
 # endif /* _SC_LEVEL4_DCACHE_LINESIZE */
 	return h;
 #else /* !QHAVE_SYSCONF */
@@ -1156,7 +1379,7 @@ PERL_STATIC_INLINE int parameter_known_page_size_log2(void)
 #if QHAVE_SYSCONF
 # ifdef _SC_PAGESIZE
 	l = llog2(sysconf(_SC_PAGESIZE));
-	if(l != -1) return l;
+	if(likely(l != -1)) return l;
 # endif /* _SC_PAGESIZE */
 # ifdef _SC_PAGE_SIZE
 #  ifdef _SC_PAGESIZE
@@ -1164,13 +1387,13 @@ PERL_STATIC_INLINE int parameter_known_page_size_log2(void)
 #  endif /* _SC_PAGESIZE */
 	{
 		l = llog2(sysconf(_SC_PAGE_SIZE));
-		if(l != -1) return l;
+		if(likely(l != -1)) return l;
 	}
 # endif /* _SC_PAGE_SIZE */
 #endif /* QHAVE_SYSCONF */
 #if QHAVE_GETPAGESIZE
 	l = llog2(getpagesize());
-	if(l != -1) return l;
+	if(likely(l != -1)) return l;
 #endif /* QHAVE_GETPAGESIZE */
 	return -1;
 }
@@ -1189,8 +1412,8 @@ PERL_STATIC_INLINE word parameter_preferred(void)
 	 * line size.  Known line and page sizes could nevertheless be
 	 * the other way round.
 	 */
-	if(psl == -1) psl = lsl > 12 ? lsl : 12;
-	if(lsl == -1) lsl = psl < 6 ? psl : 6;
+	if(unlikely(psl == -1)) psl = unlikely(lsl > 12) ? lsl : 12;
+	if(unlikely(lsl == -1)) lsl = unlikely(psl < 6) ? psl : 6;
 	/*
 	 * Having determined (our best guess of) the system's actual
 	 * line and page size, these must now be modified to conform to
@@ -1201,10 +1424,10 @@ PERL_STATIC_INLINE word parameter_preferred(void)
 	 * be reduced to a size that's still too bit to deal with but
 	 * at least is sure not to overflow the fields they have to fit.
 	 */
-	if(lsl < WORD_SZ_LOG2) lsl = WORD_SZ_LOG2;
-	if(psl < lsl) psl = lsl;
-	if(psl > WORD_NBIT) psl = WORD_NBIT;
-	if(lsl > WORD_NBIT) lsl = WORD_NBIT;
+	if(unlikely(lsl < WORD_SZ_LOG2)) lsl = WORD_SZ_LOG2;
+	if(unlikely(psl < lsl)) psl = lsl;
+	if(unlikely(psl > WORD_NBIT)) psl = WORD_NBIT;
+	if(unlikely(lsl > WORD_NBIT)) lsl = WORD_NBIT;
 	return PARAMETER_WORD(lsl, psl);
 }
 
@@ -1235,6 +1458,9 @@ struct sizes {
 	word dhd_nextalloc_space, dhd_current_root, dhd_sz;
 	word dhd_zeropad_sz;
 	word mfl_lastalloc_datafileid, mfl_current_datafileid, mfl_sz;
+#if QWITH_DUP
+	char margin;   /* to be clobbered by SV duplication */
+#endif /* QWITH_DUP */
 };
 
 #define IS_LINE_ALIGNED(sizes, v) (!((v) & (sizes)->line_align_bits))
@@ -1248,9 +1474,10 @@ PERL_STATIC_INLINE struct sizes const *THX_sizes_construct(pTHX_
 {
 	struct sizes *sizes;
 	Newx(sizes, 1, struct sizes);
-	if(line_sz_log2 < WORD_SZ_LOG2 || page_sz_log2 < line_sz_log2 ||
+	if(unlikely(line_sz_log2 < WORD_SZ_LOG2 ||
+			page_sz_log2 < line_sz_log2 ||
 			line_sz_log2 >= WORD_NBIT ||
-			page_sz_log2 >= WORD_NBIT) {
+			page_sz_log2 >= WORD_NBIT)) {
 		bad_parameters:
 		Safefree(sizes);
 		return NULL;
@@ -1258,42 +1485,48 @@ PERL_STATIC_INLINE struct sizes const *THX_sizes_construct(pTHX_
 	sizes->line_align_bits = (((word)1) << line_sz_log2) - 1;
 	sizes->page_align_bits = (((word)1) << page_sz_log2) - 1;
 	sizes->dhd_nextalloc_space = LINE_ALIGN(sizes, DHD_ZEROPAD);
-	if(!sizes->dhd_nextalloc_space) goto bad_parameters;
+	if(!likely(sizes->dhd_nextalloc_space)) goto bad_parameters;
 	sizes->dhd_current_root =
 		LINE_ALIGN(sizes, sizes->dhd_nextalloc_space + WORD_SZ);
-	if(!sizes->dhd_current_root) goto bad_parameters;
+	if(!likely(sizes->dhd_current_root)) goto bad_parameters;
 	sizes->dhd_sz = LINE_ALIGN(sizes, sizes->dhd_current_root + WORD_SZ);
-	if(!sizes->dhd_sz) goto bad_parameters;
+	if(!likely(sizes->dhd_sz)) goto bad_parameters;
 	sizes->dhd_zeropad_sz = sizes->dhd_nextalloc_space - DHD_ZEROPAD;
 	sizes->mfl_lastalloc_datafileid =
 		LINE_ALIGN(sizes, MFL_PARAM + WORD_SZ);
-	if(!sizes->mfl_lastalloc_datafileid) goto bad_parameters;
+	if(!likely(sizes->mfl_lastalloc_datafileid)) goto bad_parameters;
 	sizes->mfl_current_datafileid =
 		LINE_ALIGN(sizes, sizes->mfl_lastalloc_datafileid + WORD_SZ);
-	if(!sizes->mfl_current_datafileid) goto bad_parameters;
+	if(!likely(sizes->mfl_current_datafileid)) goto bad_parameters;
 	sizes->mfl_sz =
 		PAGE_ALIGN(sizes, sizes->mfl_current_datafileid + WORD_SZ);
-	if(!sizes->mfl_sz) goto bad_parameters;
+	if(!likely(sizes->mfl_sz)) goto bad_parameters;
 	return sizes;
 }
 
-static PTR_TBL_t *sizes_table;
-
-#define sizes_lookup(par) THX_sizes_lookup(aTHX_ par)
-static struct sizes const *THX_sizes_lookup(pTHX_ word par)
+#define sizes_lookup(par) THX_sizes_lookup(aTHX_ aMY_CXT_ par)
+static SV *THX_sizes_lookup(pTHX_ pMY_CXT_ word par)
 {
 	int line_sz_log2 = PARAMETER_WORD_LINE_SZ_LOG2(par);
 	int page_sz_log2 = PARAMETER_WORD_PAGE_SZ_LOG2(par);
-	void *key = NUM2PTR(void*, line_sz_log2 | (page_sz_log2 << 8));
-	void *sizes_v = ptr_table_fetch(sizes_table, key);
-	if(sizes_v) {
-		return sizes_v;
+	char key[2];
+	SV **sizes_svp;
+	key[0] = line_sz_log2;
+	key[1] = page_sz_log2;
+	sizes_svp = hv_fetch(MY_CXT.sizes_table, key, 2, 0);
+	if(likely(sizes_svp)) {
+		return *sizes_svp;
 	} else {
 		struct sizes const *sizes =
 			sizes_construct(line_sz_log2, page_sz_log2);
-		if(!sizes) return NULL;
-		ptr_table_store(sizes_table, key, (void*)sizes);
-		return sizes;
+		SV *sizes_sv;
+		if(!likely(sizes)) return NULL;
+		sizes_sv = newSV_type(SVt_PV);
+		SvPV_set(sizes_sv, (char *)sizes);
+		SvLEN_set(sizes_sv, sizeof(struct sizes));
+		SvREADONLY_on(sizes_sv);
+		(void) hv_store(MY_CXT.sizes_table, key, 2, sizes_sv, 0);
+		return sizes_sv;
 	}
 }
 
@@ -1305,67 +1538,67 @@ static struct sizes const *THX_sizes_lookup(pTHX_ word par)
 #define MASTER_FILE_MAGIC WORD_C(0xa58afd185cbf5af7)
 
 /*
- * memory dereferencing
+ * reference-counted handling of mmaps
  *
- * BYTE_AT() and WORD_AT() are syntactic sugar for working with offsets
- * into memory maps.
+ * We can have several objects referring to a single mapping, and those
+ * objects' need for the mapping have largely unrelated lifetimes.
+ * We want to keep the mapping as long as at least one object needs it.
+ * We therefore reify mappings as SVs, so that ordinary Perl reference
+ * counting is applied.
  *
- * sync_read_word() is intended to provide atomic reading of a
- * mutable word, ordered relative to other memory operations.  It is
- * a counterpart to the built-in __sync_bool_compare_and_swap(), which
- * performs an atomic compare-and-set.  However, the C language (even
- * with gcc extensions) doesn't actually provide a way to guarantee that
- * a read is atomic.  This implementation, using a "volatile" qualifier,
- * ensures that the operation is a memory barrier, but doesn't guarantee
- * atomicity.  We must hope that the compiler uses a native atomic
- * read instruction.
+ * However, in threaded builds we can end up needing to share a mapping
+ * between threads.  (The alternative is to duplicate the mapping, for
+ * which there is no convenient technique.)  SVs are not shared between
+ * threads, and are duplicated across thread cloning, so each thread
+ * has its own reference count.  We therefore require a second layer of
+ * reference counting, maintained using thread-safe atomic operators,
+ * to manage the sharing between threads.  (We could alternatively
+ * have had objects that need the mapping directly own a thread-safe
+ * counted reference, but presumably the intra-thread reference counting
+ * is cheaper.)
  */
-
-#define BYTE_AT(base, offset) (*(byte*)(((char*)(base))+(offset)))
-#define WORD_AT(base, offset) (*(word*)(((char*)(base))+(offset)))
-
-PERL_STATIC_INLINE word sync_read_word(word const *ptr)
-{
-	return *(word const volatile *)ptr;
-}
-
-/* refcounted handling of mmaps */
-
-#define mmap_addr_from_sv(mapsv) THX_mmap_addr_from_sv(aTHX_ mapsv)
-PERL_STATIC_INLINE void *THX_mmap_addr_from_sv(pTHX_ SV *mapsv)
-{
-	return (void *)SvPVX(mapsv);
-}
-
-#define mmap_len_from_sv(mapsv) THX_mmap_len_from_sv(aTHX_ mapsv)
-PERL_STATIC_INLINE size_t THX_mmap_len_from_sv(pTHX_ SV *mapsv)
-{
-	return (size_t)SvUVX(mapsv);
-}
 
 static int THX_mmap_mg_free(pTHX_ SV *sv, MAGIC *mg)
 {
 	void *addr;
+#if QWITH_DUP
+	if(unlikely(threadrc_dec((word*)mg->mg_ptr))) return 0;
+	Safefree(mg->mg_ptr);
+#endif /* QWITH_DUP */
 	PERL_UNUSED_ARG(mg);
-	addr = mmap_addr_from_sv(sv);
-	if(likely(addr)) (void) munmap(addr, mmap_len_from_sv(sv));
+	addr = SvPVX(sv);
+	if(likely(addr)) (void) munmap(addr, SvUVX(sv));
 	return 0;
 }
 
+#if QWITH_DUP
+static int THX_mmap_mg_dup(pTHX_ MAGIC *mg, CLONE_PARAMS *param)
+{
+	PERL_UNUSED_ARG(param);
+	threadrc_inc((word*)mg->mg_ptr);
+	return 0;
+}
+#endif /* QWITH_DUP */
+
 static MGVTBL const mmap_mgvtbl = {
-	NULL, /* get */
-	NULL, /* set */
-	NULL, /* len */
-	NULL, /* clear */
+	0, /* get */
+	0, /* set */
+	0, /* len */
+	0, /* clear */
 	THX_mmap_mg_free, /* free */
-#if PERL_VERSION_GE(5,7,3)
-	NULL, /* copy */
-	NULL, /* dup */
-#endif /* >=5.7.3 */
-#if (PERL_VERSION_GE(5,8,9) && !PERL_VERSION_GE(5,9,0)) || \
-		PERL_VERSION_GE(5,9,3)
-	NULL, /* local */
-#endif /* (>=5.8.9 && <5.9.0) || >=5.9.3 */
+#ifdef MGf_COPY
+	0, /* copy */
+#endif /* MGf_COPY */
+#ifdef MGf_DUP
+# if QWITH_DUP
+	THX_mmap_mg_dup, /* dup */
+# else /* !QWITH_DUP */
+	0, /* dup */
+# endif /* !QWITH_DUP */
+#endif /* MGf_DUP */
+#ifdef MGf_LOCAL
+	0, /* local */
+#endif /* MGf_LOCAL */
 };
 
 #define mmap_early_unmap(mapsv) THX_mmap_early_unmap(aTHX_ mapsv)
@@ -1384,15 +1617,116 @@ static SV *THX_mmap_as_sv(pTHX_ int fd, word len, bool writable)
 		return NULL;
 	}
 	mapsv = sv_2mortal(newSV_type(SVt_PVMG));
+#if QWITH_DUP
+	{
+		word *rcp;
+		MAGIC *mg;
+		Newxz(rcp, 1, word);
+		mg = sv_magicext(mapsv, NULL, PERL_MAGIC_ext,
+				(MGVTBL*)&mmap_mgvtbl, (char*)rcp, 0);
+		mg->mg_flags |= MGf_DUP;
+	}
+#else /* !QWITH_DUP */
 	(void) sv_magicext(mapsv, NULL, PERL_MAGIC_ext, (MGVTBL*)&mmap_mgvtbl,
 				NULL, 0);
-	addr = mmap(NULL, len, writable ? (PROT_READ|PROT_WRITE) : PROT_READ,
+#endif /* !QWITH_DUP */
+	addr = mmap(NULL, len,
+		likely(writable) ? (PROT_READ|PROT_WRITE) : PROT_READ,
 		MAP_SHARED, fd, 0);
 	if(unlikely(addr == MAP_FAILED)) return NULL;
 	SvPV_set(mapsv, (char *)addr);
 	SvUV_set(mapsv, len);
 	return mapsv;
 }
+
+/*
+ * event counters
+ *
+ * To make these cheap to use, each counter is just a word quantity.
+ * It is possible for these to wrap.
+ */
+
+#if QWITH_TALLY
+
+# define tally_boot() THX_tally_boot(aTHX_ aMY_CXT)
+PERL_STATIC_INLINE void THX_tally_boot(pTHX_ pMY_CXT)
+{
+	int i;
+	for(i = 0; i != K_SZ; i++)
+		MY_CXT.tally_name_sv[i] = newSVpv_share(tally_name_pv[i], 0);
+}
+
+struct tally { word k[K_SZ]; };
+
+# define tally_event(st, type) ((void) ((st)->k[type]++))
+
+# define tally_zero(st) THX_tally_zero(aTHX_ st)
+PERL_STATIC_INLINE void THX_tally_zero(pTHX_ struct tally *tally)
+{
+	Zero(tally, 1, struct tally);
+}
+
+PERL_STATIC_INLINE void tally_add(struct tally *a, struct tally const *b)
+{
+	int i;
+	for(i = 0; i != K_SZ; i++)
+		a->k[i] += b->k[i];
+}
+
+# define tally_newSVword(v) THX_tally_newSVword(aTHX_ v)
+PERL_STATIC_INLINE SV *THX_tally_newSVword(pTHX_ word v)
+{
+	if(likely((word)(UV)v == v)) {
+		return newSVuv((UV)v);
+	} else {
+		/*
+		 * UV isn't big enough.  To represent the word value
+		 * exactly, generate a string in decimal.  The exact
+		 * numerical value can be recovered from that if the user
+		 * tries hard, and if not then conversion to the default
+		 * numeric types will at least have familiar behaviour.
+		 *
+		 * There might be a printf format that can decimalise a
+		 * word, but there also might not be.  As it won't make a
+		 * huge difference to performance, rather than have two
+		 * versions of the code, we just take the DIY approach.
+		 * We know unsigned int is at least 32 bits (because the
+		 * Perl core requires that) and we have a printf format
+		 * for it.
+		 */
+		char buf[21], *p;
+		(void) sprintf(buf, "%08u%06u%06u",
+			(unsigned) (v / WORD_C(1000000000000)),
+			(unsigned) ((v / WORD_C(1000000)) % WORD_C(1000000)),
+			(unsigned) (v % WORD_C(1000000)));
+		for(p = buf; p[0] == '0'; p++) ;
+		return newSVpvn(p, buf+20 - p);
+	}
+}
+
+# define tally_as_hvref(st) THX_tally_as_hvref(aTHX_ st)
+PERL_STATIC_INLINE SV *THX_tally_as_hvref(pTHX_ struct tally const *tally)
+{
+	dMY_CXT;
+	HV *hv = newHV();
+	SV *hvref = sv_2mortal(newRV_noinc((SV*)hv));
+	int i;
+	for(i = 0; i != K_SZ; i++)
+		(void) hv_store_ent(hv, MY_CXT.tally_name_sv[i],
+			tally_newSVword(tally->k[i]),
+			SvSHARED_HASH(MY_CXT.tally_name_sv[i]));
+	return hvref;
+}
+
+#else /* !QWITH_TALLY */
+
+# define tally_boot() ((void) 0)
+# define tally_event(st, type) ((void) 0)
+# define tally_zero(st) ((void) 0)
+# define tally_add(a, b) ((void) 0)
+# define tally_as_hvref(st) sv_2mortal(newRV_noinc((SV*)newHV()))
+
+#endif /* !QWITH_TALLY */
 
 /*
  * top-level shash representation
@@ -1405,33 +1739,6 @@ static SV *THX_mmap_as_sv(pTHX_ int fd, word len, bool writable)
  *
  * The same mode flag set is used for opening modes and for handle modes,
  * because of the overlap.
- *
- * FUTURE: should also support a handle type representing an uncommitted
- * transaction.  This snapshots root pointer at first read operation,
- * and then records read and write operations performed on it and their
- * results.  It can check whether any conflicting write has occurred
- * by retrying the read operations from new shared root and comparing
- * results; as an optimisation, if the shared root hasn't changed from
- * the snapshot then no write has occurred.  This check can be exposed
- * as a method to allow the caller to abort a doomed transaction early.
- * When it tries to commit, if no conflicting write has occurred,
- * it performs the recorded write operations, then tries to replace
- * the root.  If the root has changed, it must go back to the check for
- * conflicting writes, and potentially perform its own writes again.
- * (A standard writable handle acts as a transaction handle that
- * automatically commits on every operation.)
- *
- * FUTURE: should have a mode flag to synch file data where necessary
- * to keep disk image consistent.  Would ensure that data file writes
- * complete before root-pointer replacement occurs, but doesn't need to
- * wait for disk writes to actually complete.
- *
- *
- * FUTURE: should have a mode flag or method (or both) to wait for
- * root-pointer replacement to complete synchronously, to achieve
- * durability of writes.  Only meaningful if using the mode that keeps
- * the disk image consistent, so as a mode it implies the consistency
- * mode, and as a method it's invalid without the consistency mode.
  */
 
 #define STOREMODE_READ     0x01
@@ -1441,13 +1748,12 @@ static SV *THX_mmap_as_sv(pTHX_ int fd, word len, bool writable)
 #define STOREMODE_SNAPSHOT 0x10
 
 struct shash {
-	struct sizes const *sizes;
-	SV *top_pathname_sv;
-	SV *data_mmap_sv;
-	void *data_mmap;
 	unsigned mode;
 	word data_size;
 	word parameter;
+#if QWITH_TALLY
+	struct tally tally;
+#endif /* QWITH_TALLY */
 	union {
 		struct {
 			word data_file_id;
@@ -1459,18 +1765,111 @@ struct shash {
 			word root;
 		} snapshot;
 	} u;
+	SV *top_pathname_sv;
+	SV *data_mmap_sv;
+	void *data_mmap;
+#if QWITH_DUP
+	SV *sizes_sv;
+#endif /* QWITH_DUP */
+	struct sizes const *sizes;
+	/*
+	 * The last member of this structure must be one that can
+	 * be reconstructed from others, because the default scalar
+	 * duplication code doesn't quite copy the scalar's entire
+	 * allocated buffer.  It expects a scalar's buffer to contain
+	 * a nul-terminated string, meaning that the last byte of the
+	 * buffer is either the terminating nul or junk past the end of
+	 * the string, so it doesn't actually copy that byte, but sets
+	 * it to nul.  So when this structure is stored in a scalar's
+	 * buffer, with no nul terminator, the last member will be
+	 * clobbered in the process of duplication, before our custom
+	 * duplication code gets to run.
+	 */
 };
 
-static HV *shash_handle_stash;
+static int THX_shash_mg_free(pTHX_ SV *sv, MAGIC *mg)
+{
+	struct shash *sh = (struct shash *)SvPVX(sv);
+	PERL_UNUSED_ARG(mg);
+	if(!(sh->mode & STOREMODE_SNAPSHOT)) {
+		if(likely(sh->u.live.master_mmap_sv))
+			SvREFCNT_dec_NN(sh->u.live.master_mmap_sv);
+		if(likely(!dirref_is_null(sh->u.live.dir)))
+			dirref_close(sh->u.live.dir);
+	}
+	if(likely(sh->top_pathname_sv)) SvREFCNT_dec_NN(sh->top_pathname_sv);
+	if(likely(sh->data_mmap_sv)) SvREFCNT_dec_NN(sh->data_mmap_sv);
+	return 0;
+}
+
+#if QWITH_DUP
+static int THX_shash_mg_dup(pTHX_ MAGIC *mg, CLONE_PARAMS *param)
+{
+	struct shash *sh = (struct shash *)SvPVX(mg->mg_obj);
+	if(!(sh->mode & STOREMODE_SNAPSHOT)) {
+		if(likely(sh->u.live.master_mmap_sv)) {
+			sh->u.live.master_mmap_sv =
+				sv_dup_inc(sh->u.live.master_mmap_sv, param);
+			sh->u.live.master_mmap =
+				SvPVX(sh->u.live.master_mmap_sv);
+		}
+		sh->u.live.dir = dirref_dup(sh->u.live.dir);
+	}
+	sh->top_pathname_sv = sv_dup_inc(sh->top_pathname_sv, param);
+	if(likely(sh->data_mmap_sv)) {
+		sh->data_mmap_sv = sv_dup_inc(sh->data_mmap_sv, param);
+		sh->data_mmap = SvPVX(sh->data_mmap_sv);
+	}
+	if(likely(sh->sizes_sv)) {
+		sh->sizes_sv = sv_dup_inc(sh->sizes_sv, param);
+		sh->sizes = (struct sizes const *)SvPVX(sh->sizes_sv);
+	}
+	return 0;
+}
+#endif /* QWITH_DUP */
+
+static MGVTBL const shash_mgvtbl = {
+	0, /* get */
+	0, /* set */
+	0, /* len */
+	0, /* clear */
+	THX_shash_mg_free, /* free */
+#ifdef MGf_COPY
+	0, /* copy */
+#endif /* MGf_COPY */
+#ifdef MGf_DUP
+# if QWITH_DUP
+	THX_shash_mg_dup, /* dup */
+# else /* !QWITH_DUP */
+	0, /* dup */
+# endif /* !QWITH_DUP */
+#endif /* MGf_DUP */
+#ifdef MGf_LOCAL
+	0, /* local */
+#endif /* MGf_LOCAL */
+};
+
+#define shash_apply_magic(shsv) THX_shash_apply_magic(aTHX_ shsv)
+PERL_STATIC_INLINE void THX_shash_apply_magic(pTHX_ SV *shsv)
+{
+	MAGIC *mg = sv_magicext(shsv, shsv, PERL_MAGIC_ext,
+				(MGVTBL*)&shash_mgvtbl, NULL, 0);
+	PERL_UNUSED_VAR(mg);
+#if QWITH_DUP
+	mg->mg_flags |= MGf_DUP;
+#endif /* QWITH_DUP */
+}
 
 #define shash_or_null_from_svref(shsvref) \
 	THX_shash_or_null_from_svref(aTHX_ shsvref)
 static struct shash *THX_shash_or_null_from_svref(pTHX_ SV *shsvref)
 {
+	dMY_CXT;
 	SV *shsv;
 	SvGETMAGIC(shsvref);
 	return likely(SvROK(shsvref) && (shsv = SvRV(shsvref)) &&
-			SvOBJECT(shsv) && SvSTASH(shsv) == shash_handle_stash) ?
+			SvOBJECT(shsv) &&
+			SvSTASH(shsv) == MY_CXT.shash_handle_stash) ?
 		(struct shash *)SvPVX(shsv) : NULL;
 }
 
@@ -1537,6 +1936,18 @@ static void THX_shash_error_errnum(pTHX_ struct shash *sh, char const *action,
 	int errnum)
 {
 	shash_error(sh, action, Strerror(errnum));
+}
+
+#define shash_unlinkfile_early(sh, act, par_p) \
+	THX_shash_unlinkfile_early(aTHX_ sh, act, par_p)
+static void THX_shash_unlinkfile_early(pTHX_ struct shash *sh,
+	char const *action, struct unlinkfile_cleanup_par *par_p)
+{
+	int e;
+	if(likely(unlinkfile_early(par_p) != -1)) return;
+	e = errno;
+	if(likely(e == ENOENT) || likely(e == EBUSY)) return;
+	shash_error_errnum(sh, action, e);
 }
 
 #define shash_error_errno(sh, act) THX_shash_error_errno(aTHX_ sh, act)
@@ -1669,7 +2080,8 @@ static int THX_dir_filename_class(pTHX_ char const *filename, word *id_p)
 }
 
 
-typedef void (*iterate_fn_t)(pTHX_ struct shash *sh, char const *fn, word arg);
+typedef void (*iterate_fn_t)(pTHX_ struct shash *sh, char const *action,
+	char const *fn, word arg);
 
 #define dir_iterate(sh, act, iter, arg) \
 	THX_dir_iterate(aTHX_ sh, act, iter, arg)
@@ -1679,7 +2091,7 @@ static void THX_dir_iterate(pTHX_ struct shash *sh, char const *action,
 	DIR *dirh;
 	closedirh_ref_t dirhr;
 	int old_errno = errno;
-	dirh = dirref_at_opendir(sh->u.live.dir);
+	dirh = dirref_dir_opendir(sh->u.live.dir);
 	if(!likely(dirh)) shash_error_errno(sh, action);
 	dirhr = closedirh_save(dirh);
 	while(1) {
@@ -1687,23 +2099,28 @@ static void THX_dir_iterate(pTHX_ struct shash *sh, char const *action,
 		errno = 0;
 		de = readdir(dirh);
 		if(!likely(de)) break;
-		THX_iterate(aTHX_ sh, de->d_name, arg);
+		THX_iterate(aTHX_ sh, action, de->d_name, arg);
 	}
 	if(unlikely(errno)) shash_error_errno(sh, action);
 	errno = old_errno;
 	closedirh_early(dirhr);
 }
 
-static void THX_dir_clean_file(pTHX_ struct shash *sh, char const *fn,
-	word curfileid)
+static void THX_dir_clean_file(pTHX_ struct shash *sh, char const *action,
+	char const *fn, word curfileid)
 {
 	word fileid;
 	int cls = dir_filename_class(fn, &fileid);
-	if(unlikely(cls == FILENAME_CLASS_TEMP ||
+	int e;
+	if(!unlikely(cls == FILENAME_CLASS_TEMP ||
 			(cls == FILENAME_CLASS_DATA &&
 			 unlikely((curfileid - fileid - 1) <
 					(((word)1) << 62)))))
-		(void) dirref_via_unlink(sh->u.live.dir, fn);
+		return;
+	if(!unlikely(dirref_rel_unlink(sh->u.live.dir, fn) == -1)) return;
+	e = errno;
+	if(likely(e == ENOENT) || likely(e == EBUSY)) return;
+	shash_error_errnum(sh, action, e);
 }
 
 #define dir_clean(sh, act, curfileid) THX_dir_clean(aTHX_ sh, act, curfileid)
@@ -1731,22 +2148,13 @@ PERL_STATIC_INLINE void THX_dir_clean(pTHX_ struct shash *sh,
  * structure records any partial line that is owned by this process
  * and available for allocation.  When a write operation is complete,
  * the allocation state (and any unused partial line) is discarded.
- *
- * FUTURE: should have a shash_prealloc() function that acquires space
- * ready for allocation, with writers estimating how much space they'll
- * use, to minimise activity on the nextalloc pointer and maximise the
- * chances of lines abutting to allow objects to straddle the boundary.
- *
- * FUTURE: should be able to reuse space allocated for a write that was
- * aborted (due to root pointer conditional swap not happening, or due
- * to operation being interrupted by exception).  Allocated space that
- * may have had objects written to it but not published can go back to
- * the prealloc pool, or to the data file's pool.
  */
 
 #define NULL_PTR (~(word)0)
 #define ZEROPAD_PTR ((word)DHD_ZEROPAD)
 #define PTR_FLAG_ROLLOVER ((word)1)
+
+#define unchecked_pointer_loc(sh, ptr) (&WORD_AT(sh->data_mmap, ptr))
 
 #define pointer_loc(sh, ptr, sp) THX_pointer_loc(aTHX_ sh, ptr, sp)
 static word *THX_pointer_loc(pTHX_ struct shash *sh, word ptr, word *spc_p)
@@ -1755,7 +2163,7 @@ static word *THX_pointer_loc(pTHX_ struct shash *sh, word ptr, word *spc_p)
 	if(!likely(IS_WORD_ALIGNED(ptr))) shash_error_data(sh);
 	if(unlikely(ptr >= ds)) shash_error_data(sh);
 	*spc_p = ds - ptr;
-	return &WORD_AT(sh->data_mmap, ptr);
+	return unchecked_pointer_loc(sh, ptr);
 }
 
 #define shash_ensure_data_file(sh) THX_shash_ensure_data_file(aTHX_ sh)
@@ -1768,7 +2176,7 @@ static void THX_shash_ensure_data_file(pTHX_ struct shash *sh)
 	struct stat statbuf;
 	SV *mapsv;
 	tmps_ix_t old_tmps_floor;
-	datafileid = sync_read_word(&WORD_AT(sh->u.live.master_mmap,
+	datafileid = word_get(&WORD_AT(sh->u.live.master_mmap,
 					sh->sizes->mfl_current_datafileid));
 	if(likely(mapsv = sh->data_mmap_sv)) {
 		if(likely(datafileid == sh->u.live.data_file_id)) return;
@@ -1779,7 +2187,8 @@ static void THX_shash_ensure_data_file(pTHX_ struct shash *sh)
 	if(unlikely(datafileid == 0)) {
 		word dsz = PAGE_ALIGN(sh->sizes, sh->sizes->dhd_sz + WORD_SZ);
 		char *map;
-		if(!dsz || (word)(size_t)dsz != dsz || (word)(STRLEN)dsz != dsz)
+		if(unlikely(!dsz || (word)(size_t)dsz != dsz ||
+				(word)(STRLEN)dsz != dsz))
 			shash_error_errnum(sh, "use", ENOMEM);
 		Newxz(map, dsz, char);
 		WORD_AT(map, DHD_MAGIC) = DATA_FILE_MAGIC;
@@ -1798,12 +2207,12 @@ static void THX_shash_ensure_data_file(pTHX_ struct shash *sh)
 		return;
 	}
 	dir_make_data_filename(data_filename, datafileid);
-	data_fd = dirref_via_open_cloexec(sh->u.live.dir, data_filename,
-			((sh->mode & STOREMODE_WRITE) ? O_RDWR : O_RDONLY), 0);
+	data_fd = dirref_rel_open_cloexec(sh->u.live.dir, data_filename,
+		likely(sh->mode & STOREMODE_WRITE) ? O_RDWR : O_RDONLY, 0);
 	if(unlikely(data_fd == -1)) {
 		word newdatafileid;
 		if(unlikely(errno != ENOENT)) shash_error_errno(sh, "use");
-		newdatafileid = sync_read_word(&WORD_AT(sh->u.live.master_mmap,
+		newdatafileid = word_get(&WORD_AT(sh->u.live.master_mmap,
 					sh->sizes->mfl_current_datafileid));
 		if(likely(newdatafileid != datafileid)) {
 			datafileid = newdatafileid;
@@ -1827,7 +2236,7 @@ static void THX_shash_ensure_data_file(pTHX_ struct shash *sh)
 	if(!likely(mapsv)) shash_error_errno(sh, "use");
 	sh->u.live.data_file_id = datafileid;
 	sh->data_mmap_sv = SvREFCNT_inc_simple_NN(mapsv);
-	sh->data_mmap = mmap_addr_from_sv(mapsv);
+	sh->data_mmap = SvPVX(mapsv);
 	FREETMPS;
 	PL_tmps_floor = old_tmps_floor;
 	closefd_early(fdr);
@@ -1866,7 +2275,7 @@ static word *THX_shash_alloc(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	prealloc_end = alloc->prealloc_loc + alloc->prealloc_len;
 	nextalloc_p = &WORD_AT(sh->data_mmap, sh->sizes->dhd_nextalloc_space);
 	data_size = sh->data_size;
-	pos = sync_read_word(nextalloc_p);
+	pos = word_get(nextalloc_p);
 	if(unlikely(!IS_LINE_ALIGNED(sh->sizes, pos) || pos > data_size))
 		shash_error_data(sh);
 	if(likely(&BYTE_AT(sh->data_mmap, pos) == prealloc_end)) {
@@ -1875,8 +2284,7 @@ static word *THX_shash_alloc(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 		epos = pos + llen;
 		if(unlikely(epos < pos || epos > data_size))
 			longjmp(alloc->fulljb, 1);
-		if(likely(__sync_bool_compare_and_swap(nextalloc_p,
-				pos, epos))) {
+		if(likely(word_cset(nextalloc_p, pos, epos))) {
 			alloc->prealloc_len += llen;
 			goto got_prealloc;
 		}
@@ -1884,15 +2292,14 @@ static word *THX_shash_alloc(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	llen = LINE_ALIGN(sh->sizes, wlen);
 	if(!likely(llen)) shash_error_toobig(sh, alloc->action);
 	while(1) {
-		pos = sync_read_word(nextalloc_p);
+		pos = word_get(nextalloc_p);
 		if(unlikely(!IS_LINE_ALIGNED(sh->sizes, pos) ||
 				pos > data_size))
 			shash_error_data(sh);
 		epos = pos + llen;
 		if(unlikely(epos < pos || epos > data_size))
 			longjmp(alloc->fulljb, 1);
-		if(likely(__sync_bool_compare_and_swap(nextalloc_p,
-				pos, epos))) {
+		if(likely(word_cset(nextalloc_p, pos, epos))) {
 			byte *newalloc_loc = &BYTE_AT(sh->data_mmap, pos);
 			alloc->prealloc_loc = newalloc_loc;
 			alloc->prealloc_len = llen;
@@ -1924,6 +2331,7 @@ static struct pvl THX_string_as_pvl(pTHX_ struct shash *sh, word ptr)
 	pvl.pv = (char*)&loc[1];
 	pvl.len = len;
 	if(unlikely(pvl.pv[pvl.len])) shash_error_data(sh);
+	tally_event(&sh->tally, K_STRING_READ);
 	return pvl;
 }
 
@@ -1937,6 +2345,7 @@ static SV *THX_string_as_sv(pTHX_ struct shash *sh, char const *action,
 	SV *sv;
 	if(unlikely((size_t)(STRLEN)pvl.len != pvl.len))
 		shash_error_errnum(sh, action, ENOMEM);
+	TAINT;
 	/*
 	 * There are two strategies available for returning the string
 	 * as an SV.  We can copy into a plain string SV, or we can point
@@ -1972,10 +2381,6 @@ static SV *THX_string_as_sv(pTHX_ struct shash *sh, char const *action,
 	 * is slightly contrived so as to achieve the exact 120-octet
 	 * threshold on the amd64 system used for speed trials (where
 	 * MAGIC is 40 octets, XPV is 32 octets, and XPVMG is 64 octets).
-	 *
-	 * FUTURE: timing results for significantly different systems,
-	 * especially a 32-bit architecture, should be used to refine
-	 * this formula.
 	 */
 	if(pvl.len < sizeof(XPVMG) *
 			((sizeof(MAGIC)+sizeof(XPVMG)*2-1) / sizeof(XPVMG)) -
@@ -1988,6 +2393,7 @@ static SV *THX_string_as_sv(pTHX_ struct shash *sh, char const *action,
 		SvPV_set(sv, pvl.pv);
 		SvCUR_set(sv, pvl.len);
 		SvPOK_on(sv);
+		SvTAINTED_on(sv);
 	}
 	SvREADONLY_on(sv);
 	return sv;
@@ -1998,8 +2404,9 @@ static int THX_string_cmp_pvl(pTHX_ struct shash *sh, word aptr,
 	struct pvl bpvl)
 {
 	struct pvl apvl = string_as_pvl(sh, aptr);
-	int r = memcmp(apvl.pv, bpvl.pv,
-			apvl.len < bpvl.len ? apvl.len : bpvl.len);
+	int r;
+	tally_event(&sh->tally, K_KEY_COMPARE);
+	r = memcmp(apvl.pv, bpvl.pv, apvl.len < bpvl.len ? apvl.len : bpvl.len);
 	return r ? r : apvl.len == bpvl.len ? 0 : apvl.len < bpvl.len ? -1 : 1;
 }
 
@@ -2029,6 +2436,7 @@ static word THX_string_write_from_pvl(pTHX_ struct shash *sh,
 	loc[0] = pvl.len;
 	(void) memcpy(&loc[1], pvl.pv, pvl.len);
 	((byte*)&loc[1])[pvl.len] = 0;
+	tally_event(&sh->tally, K_STRING_WRITE);
 	return ptr;
 }
 
@@ -2053,69 +2461,78 @@ PERL_STATIC_INLINE word THX_string_migrate(pTHX_ struct shash *shf, word ptrf,
 /*
  * btrees in the shash
  *
- * This code is a bit spaghetti-ish, in the attempt to produce reasonably
- * efficient machine code.  You are expected to already understand how
- * a btree operates.
- *
  * Things are a bit asymmetric because we're only caching lower bound
- * keys in the btree nodes.  If a key of interest precedes the first
- * key in the shash, this becomes immediately obvious at the root node.
- * Having compared against the boundary keys at a parent node means that
- * in a child node there is no need to compare against its first cached
- * key.  We start any search by comparing the key of interest against
- * the first lower bound key at the root node, so that comparisons
- * thereafter consistently don't need to compare against any node's
- * first lower bound.
+ * keys in the btree nodes.  For the most part, the first key in each
+ * node is ignored, because it isn't needed in order to decide where
+ * to descend.  The other keys (numbering one less than the number of
+ * subnodes) are treated as boundaries between the subnodes.  Thus for
+ * descent purposes the leftmost nodes are treated as if ther lower
+ * bound key is the empty string (the leftmost possible key).
+ *
+ * The first key in a node is only interesting at the leaf layer, where
+ * ordering relative to the target key needs to be fully resolved.
+ * However, when descending to a non-leftmost node, the comparison
+ * against the node's first key has already been made in the parent node.
+ * So the node's first key only needs to be fully included in the search
+ * process for the leftmost leaf node.
  *
  * When inserting into the btree, by using the same search mechanism we
  * always end up inserting subnodes after some existing subnode, except
  * in the necessary special case where the key of interest precedes the
  * first key in the shash.
+ *
+ * A cursor points to an item in a btree, keeping track of all of its
+ * ancestor nodes and the relevant index in each node.  It points either
+ * to an existing item, or to a notional item just to the left of the
+ * leftmost item.  In the latter case, the index in each node is 0,
+ * except in the leaf layer, where the index is -1.
  */
 
-#define MINSPLAY ((MAXSPLAY+1)>>1)
+#define MINFANOUT ((MAXFANOUT+1)>>1)
 
 #define LAYER_MAX 0x3f
 #define bnode_header_layer(h) ((h) & LAYER_MAX)
-#define bnode_header_splay(h) (((h) >> 8) & BYTE_MAX)
+#define bnode_header_fanout(h) (((h) >> 8) & BYTE_MAX)
 #define bnode_header_pad(h) ((h) & WORD_C(0xffffffffffff00c0))
 #define bnode_body_loc(loc) (&(loc)[1])
 
-#define bnode_check(sh, np, el, lp, sp) \
-	THX_bnode_check(aTHX_ sh, np, el, lp, sp)
+#define bnode_check(sh, np, el, lp, fo) \
+	THX_bnode_check(aTHX_ sh, np, el, lp, fo)
 static word const *THX_bnode_check(pTHX_ struct shash *sh, word ptr,
-	int expect_layer, int *layer_p, int *splay_p)
+	int expect_layer, int *layer_p, int *fanout_p)
 {
 	word header, spc;
 	word const *loc;
-	int layer, splay;
+	int layer, fanout;
 	loc = pointer_loc(sh, ptr, &spc);
 	header = loc[0];
 	layer = bnode_header_layer(header);
-	splay = bnode_header_splay(header);
-	if(unlikely(bnode_header_pad(header) || splay > MAXSPLAY ||
-			spc < WORD_SZ + (((size_t)splay) << (WORD_SZ_LOG2+1))))
+	fanout = bnode_header_fanout(header);
+	if(unlikely(bnode_header_pad(header) || fanout > MAXFANOUT ||
+			spc < WORD_SZ + (((size_t)fanout) << (WORD_SZ_LOG2+1))))
 		shash_error_data(sh);
 	if(unlikely(expect_layer == -1)) {
-		if(unlikely(splay < 2 && layer != 0)) shash_error_data(sh);
+		if(unlikely(fanout < 2 && layer != 0)) shash_error_data(sh);
 	} else {
-		if(unlikely(layer != expect_layer || splay < MINSPLAY))
+		if(unlikely(layer != expect_layer || fanout < MINFANOUT))
 			shash_error_data(sh);
 	}
 	*layer_p = layer;
-	*splay_p = splay;
+	*fanout_p = fanout;
+	tally_event(&sh->tally, K_BNODE_READ);
 	return loc;
 }
 
 #define BNODE_SEARCH_EXACT INT_MIN
 
-#define bnode_search(sh, nl, sp, kpvl) THX_bnode_search(aTHX_ sh, nl, sp, kpvl)
+#define bnode_search(sh, nl, fo, lm, kpvl) \
+	THX_bnode_search(aTHX_ sh, nl, fo, lm, kpvl)
 static int THX_bnode_search(pTHX_ struct shash *sh, word const *loc,
-	int splay, struct pvl keypvl)
+	int fanout, bool leftmost, struct pvl keypvl)
 {
 	int l, r;
 	word const *nodebody = bnode_body_loc(loc);
-	for(l = 0, r = splay-1; l != r; ) {
+	for(l = unlikely(leftmost) ? -1 : 0, r = fanout - 1; l != r; ) {
 		/* binary search invariant:
 		 * search key > lower bount of subnode [l]
 		 * search key < upper bound of subnode [r]
@@ -2123,165 +2540,125 @@ static int THX_bnode_search(pTHX_ struct shash *sh, word const *loc,
 		int m = (l+r+1) >> 1;
 		int cmpm = string_cmp_pvl(sh, nodebody[m << 1], keypvl);
 		if(unlikely(cmpm == 0)) {
-			return BNODE_SEARCH_EXACT | m;
+			return BNODE_SEARCH_EXACT | (m + 1);
 		} else if(cmpm > 0) {
 			r = m-1;
 		} else {
 			l = m;
 		}
 	}
-	return l;
+	return l + 1;
 }
 
 #define bnode_write(sh, alloc, nh, ne, nb) \
 	THX_bnode_write(aTHX_ sh, alloc, nh, ne, nb)
 static word THX_bnode_write(pTHX_ struct shash *sh, struct shash_alloc *alloc,
-	int layer, int splay, word const *nodebody)
+	int layer, int fanout, word const *nodebody)
 {
 	word ptr, *loc;
-	if(unlikely(splay == 0) && likely(layer == 0) &&
+	if(unlikely(fanout == 0) && likely(layer == 0) &&
 			likely(sh->sizes->dhd_zeropad_sz >= WORD_SZ))
 		return ZEROPAD_PTR;
-	loc = shash_alloc(sh, alloc, WORD_SZ + (splay << (WORD_SZ_LOG2+1)),
+	loc = shash_alloc(sh, alloc, WORD_SZ + (fanout << (WORD_SZ_LOG2+1)),
 		&ptr);
-	loc[0] = layer | (splay << 8);
-	(void) memcpy(&loc[1], nodebody, splay << (WORD_SZ_LOG2+1));
+	loc[0] = layer | (fanout << 8);
+	(void) memcpy(&loc[1], nodebody, fanout << (WORD_SZ_LOG2+1));
+	tally_event(&sh->tally, K_BNODE_WRITE);
 	return ptr;
 }
 
-#define btree_get(sh, rt, keypvl) THX_btree_get(aTHX_ sh, rt, keypvl)
-static word THX_btree_get(pTHX_ struct shash *sh, word root, struct pvl keypvl)
+struct cursor_entry {
+	word nodeptr;
+	short index;
+	byte fanout;
+};
+
+struct cursor {
+	byte root_layer;
+	struct cursor_entry ent[LAYER_MAX+1];
+};
+
+#define btree_seek(sh, cs, rt, keypvl) THX_btree_seek(aTHX_ sh, cs, rt, keypvl)
+static bool THX_btree_seek(pTHX_ struct shash *sh, struct cursor *cursor,
+	word root, struct pvl keypvl)
 {
-	int layer = -1, pos = 0;
-	word ptr = root;
+	bool leftmost = 1;
+	int layer, pos, nlayer, nfanout;
+	word ptr;
 	word const *ndloc;
+	ndloc = bnode_check(sh, root, -1, &layer, &nfanout);
+	cursor->root_layer = layer;
+	cursor->ent[layer].nodeptr = root;
 	while(1) {
-		int nlayer, nsplay;
-		ndloc = bnode_check(sh, ptr, layer, &nlayer, &nsplay);
-		if(unlikely(layer == -1)) {
-			int cmp0;
-			layer = nlayer;
-			if(unlikely(nsplay == 0)) return NULL_PTR;
-			cmp0 = string_cmp_pvl(sh, bnode_body_loc(ndloc)[0],
-				keypvl);
-			if(unlikely(cmp0 > 0)) return NULL_PTR;
-			if(unlikely(cmp0 == 0)) goto exact_match;
-		}
-		pos = bnode_search(sh, ndloc, nsplay, keypvl);
+		cursor->ent[layer].fanout = nfanout;
+		pos = bnode_search(sh, ndloc, nfanout, leftmost && layer == 0,
+			keypvl);
+		cursor->ent[layer].index = (pos & ~BNODE_SEARCH_EXACT) - 1;
 		if(unlikely(pos & BNODE_SEARCH_EXACT))
 			goto exact_match;
-		if(unlikely(layer == 0)) return NULL_PTR;
-		ptr = bnode_body_loc(ndloc)[(pos<<1)+1];
+		if(unlikely(layer == 0)) return 0;
+		if(likely(pos != 1)) leftmost = 0;
+		ptr = bnode_body_loc(ndloc)[(pos<<1)-1];
 		layer--;
+		cursor->ent[layer].nodeptr = ptr;
+		ndloc = bnode_check(sh, ptr, layer, &nlayer, &nfanout);
 	}
 	exact_match:
-	ptr = bnode_body_loc(ndloc)[((pos&~BNODE_SEARCH_EXACT)<<1)+1];
-	while(layer) {
-		int nlayer, nsplay;
+	if(likely(layer == 0)) return 1;
+	ptr = bnode_body_loc(ndloc)[((pos&~BNODE_SEARCH_EXACT)<<1)-1];
+	while(1) {
 		layer--;
-		ndloc = bnode_check(sh, ptr, layer, &nlayer, &nsplay);
+		cursor->ent[layer].nodeptr = ptr;
+		ndloc = bnode_check(sh, ptr, layer, &nlayer, &nfanout);
+		cursor->ent[layer].fanout = nfanout;
+		cursor->ent[layer].index = 0;
+		if(likely(layer == 0)) break;
 		ptr = bnode_body_loc(ndloc)[1];
 	}
-	return ptr;
+	return 1;
 }
 
-#define btree_set(sh, alloc, rt, keypvl, valpvl) \
-	THX_btree_set(aTHX_ sh, alloc, rt, keypvl, valpvl)
-static word THX_btree_set(pTHX_ struct shash *sh, struct shash_alloc *alloc,
-	word oldroot, struct pvl keypvl, struct pvl valpvl)
+#define btree_cursor_key(sh, cs) THX_btree_cursor_key(aTHX_ sh, cs)
+PERL_STATIC_INLINE word THX_btree_cursor_key(pTHX_ struct shash *sh,
+	struct cursor *cursor)
 {
-	word const *nodeloc[LAYER_MAX+1];
-	byte nodesplay[LAYER_MAX+1];
-	byte index[LAYER_MAX+1];
-	int layer = -1, root_layer = -1;
-	word keyptr, valptr, ndptr = oldroot;
-	word const *ndloc;
-	int ntorm, ntoin;
-	word inakey = 0, inaval = 0, inbkey = 0, inbval = 0;
-	word nodebody[(MAXSPLAY+MINSPLAY-1)*2];
-	while(1) {
-		int nlayer, nsplay, pos;
-		ndloc = bnode_check(sh, ndptr, layer, &nlayer, &nsplay);
-		if(unlikely(layer == -1)) layer = root_layer = nlayer;
-		nodeloc[layer] = ndloc;
-		nodesplay[layer] = nsplay;
-		if(unlikely(layer == root_layer)) {
-			int cmp0;
-			if(unlikely(nsplay == 0)) {
-				index[0] = (byte)-1;
-				goto inexact_match;
-			}
-			cmp0 = string_cmp_pvl(sh, bnode_body_loc(ndloc)[0],
-				keypvl);
-			if(unlikely(cmp0 > 0)) {
-				while(layer) {
-					index[layer] = 0;
-					ndptr = bnode_body_loc(ndloc)[1];
-					layer--;
-					ndloc = bnode_check(sh, ndptr, layer,
-							&nlayer, &nsplay);
-					nodeloc[layer] = ndloc;
-					nodesplay[layer] = nsplay;
-				}
-				index[0] = (byte)-1;
-				goto inexact_match;
-			}
-			if(unlikely(cmp0 == 0)) {
-				index[layer] = 0;
-				goto exact_match;
-			}
-		}
-		pos = bnode_search(sh, ndloc, nsplay, keypvl);
-		index[layer] = pos & ~BNODE_SEARCH_EXACT;
-		if(unlikely(pos & BNODE_SEARCH_EXACT)) goto exact_match;
-		if(unlikely(layer == 0)) goto inexact_match;
-		ndptr = bnode_body_loc(ndloc)[(pos<<1)+1];
-		layer--;
-	}
-	exact_match:
-	keyptr = bnode_body_loc(ndloc)[index[layer]<<1];
-	ndptr = bnode_body_loc(ndloc)[(index[layer]<<1)+1];
-	while(layer) {
-		int nlayer, nsplay;
-		layer--;
-		ndloc = bnode_check(sh, ndptr, layer, &nlayer, &nsplay);
-		nodeloc[layer] = ndloc;
-		nodesplay[layer] = nsplay;
-		index[layer] = 0;
-		ndptr = bnode_body_loc(ndloc)[1];
-	}
-	valptr = ndptr;
-	if(pvl_is_null(valpvl)) {
-		/* delete */
-		ntorm = 1;
+	return bnode_body_loc(unchecked_pointer_loc(sh, cursor->ent[0].nodeptr))
+			[(cursor->ent[0].index << 1)];
+}
+
+#define btree_cursor_get(sh, cs) THX_btree_cursor_get(aTHX_ sh, cs)
+PERL_STATIC_INLINE word THX_btree_cursor_get(pTHX_ struct shash *sh,
+	struct cursor *cursor)
+{
+	return bnode_body_loc(unchecked_pointer_loc(sh, cursor->ent[0].nodeptr))
+			[(cursor->ent[0].index << 1) + 1];
+}
+
+#define btree_cursor_modify(sh, alloc, ocs, repl, ik, iv) \
+	THX_btree_cursor_modify(aTHX_ sh, alloc, ocs, repl, ik, iv)
+static word THX_btree_cursor_modify(pTHX_ struct shash *sh,
+	struct shash_alloc *alloc, struct cursor *oldcursor,
+	bool replace, word inskeyptr, word insvalptr)
+{
+	int ntorm, ntoin, layer = 0, posadj;
+	word inakey = NULL_PTR, inaval = NULL_PTR;
+	word inbkey = NULL_PTR, inbval = NULL_PTR;
+	word nodebody[(MAXFANOUT+MINFANOUT-1)*2];
+	ntorm = replace ? 1 : 0;
+	posadj = unlikely(layer == 0) && !replace ? 1 : 0;
+	if(inskeyptr == NULL_PTR) {
 		ntoin = 0;
-		goto modify;
 	} else {
-		/* modify */
-		if(string_eq_pvl(sh, valptr, valpvl)) return oldroot;
-		ntorm = 1;
 		ntoin = 1;
-		inakey = keyptr;
-		inaval = string_write_from_pvl(sh, alloc, valpvl);
-		goto modify;
+		inakey = inskeyptr;
+		inaval = insvalptr;
 	}
-	inexact_match:
-	if(pvl_is_null(valpvl)) {
-		/* no-op delete */
-		return oldroot;
-	} else {
-		/* insert */
-		index[0]++;
-		ntorm = 0;
-		ntoin = 1;
-		inakey = string_write_from_pvl(sh, alloc, keypvl);
-		inaval = string_write_from_pvl(sh, alloc, valpvl);
-		goto modify;
-	}
-	modify:
 	do {
-		int nsplay = nodesplay[layer], modpos = index[layer];
-		ndloc = nodeloc[layer];
+		int nfanout = oldcursor->ent[layer].fanout;
+		int modpos = oldcursor->ent[layer].index + posadj;
+		word *ndloc = unchecked_pointer_loc(sh,
+					oldcursor->ent[layer].nodeptr);
+		posadj = 0;
 		(void) memcpy(nodebody, bnode_body_loc(ndloc),
 			modpos << (WORD_SZ_LOG2+1));
 		if(likely(ntoin)) {
@@ -2294,66 +2671,68 @@ static word THX_btree_set(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 		}
 		(void) memcpy(nodebody + ((modpos+ntoin)<<1),
 			bnode_body_loc(ndloc) + ((modpos+ntorm)<<1),
-			(nsplay-(modpos+ntorm)) << (WORD_SZ_LOG2+1));
-		nsplay = nsplay - ntorm + ntoin;
-		if(likely(nsplay >= MINSPLAY)) {
+			(nfanout-(modpos+ntorm)) << (WORD_SZ_LOG2+1));
+		nfanout = nfanout - ntorm + ntoin;
+		if(likely(nfanout >= MINFANOUT)) {
 			ntorm = 1;
 		} else {
 			word const *upndloc;
 			int uppos;
-			if(likely(layer == root_layer)) {
-				if(unlikely(nsplay == 1) && likely(layer != 0))
+			if(likely(layer == oldcursor->root_layer)) {
+				if(unlikely(nfanout == 1) && likely(layer != 0))
 					return nodebody[1];
-				return bnode_write(sh, alloc, layer, nsplay,
+				return bnode_write(sh, alloc, layer, nfanout,
 					nodebody);
 			}
 			ntorm = 2;
-			upndloc = nodeloc[layer+1];
-			uppos = index[layer+1];
-			if(likely(uppos + 1 != nodesplay[layer+1])) {
-				int adjnlayer, adjnsplay;
+			upndloc = unchecked_pointer_loc(sh,
+					oldcursor->ent[layer+1].nodeptr);
+			uppos = oldcursor->ent[layer+1].index;
+			if(likely(uppos + 1 !=
+					oldcursor->ent[layer+1].fanout)) {
+				int adjnlayer, adjnfanout;
 				word adjndptr =
 					bnode_body_loc(upndloc)[(uppos<<1) + 3];
 				word const *adjndloc =
 					bnode_check(sh, adjndptr, layer,
-						&adjnlayer, &adjnsplay);
-				(void) memcpy(nodebody + (nsplay<<1),
+						&adjnlayer, &adjnfanout);
+				(void) memcpy(nodebody + (nfanout<<1),
 					bnode_body_loc(adjndloc),
-					adjnsplay << (WORD_SZ_LOG2+1));
-				nsplay += adjnsplay;
+					adjnfanout << (WORD_SZ_LOG2+1));
+				nfanout += adjnfanout;
 			} else {
-				int adjnlayer, adjnsplay;
+				int adjnlayer, adjnfanout;
 				word adjndptr;
 				word const *adjndloc;
-				index[layer+1] = uppos - 1;
+				posadj = -1;
 				adjndptr =
 					bnode_body_loc(upndloc)[(uppos<<1) - 1];
 				adjndloc = bnode_check(sh, adjndptr, layer,
-						&adjnlayer, &adjnsplay);
-				(void) memmove(nodebody + (adjnsplay<<1),
-					nodebody, nsplay << (WORD_SZ_LOG2+1));
+						&adjnlayer, &adjnfanout);
+				(void) memmove(nodebody + (adjnfanout<<1),
+					nodebody, nfanout << (WORD_SZ_LOG2+1));
 				(void) memcpy(nodebody,
 					bnode_body_loc(adjndloc),
-					adjnsplay << (WORD_SZ_LOG2+1));
-				nsplay += adjnsplay;
+					adjnfanout << (WORD_SZ_LOG2+1));
+				nfanout += adjnfanout;
 			}
 		}
-		if(unlikely(nsplay > MAXSPLAY)) {
-			int splitpos = nsplay >> 1;
+		if(unlikely(nfanout > MAXFANOUT)) {
+			int splitpos = nfanout >> 1;
 			inakey = nodebody[0];
 			inaval = bnode_write(sh, alloc, layer, splitpos,
 					nodebody);
 			inbkey = nodebody[splitpos << 1];
-			inbval = bnode_write(sh, alloc, layer, nsplay-splitpos,
+			inbval = bnode_write(sh, alloc, layer, nfanout-splitpos,
 					nodebody + (splitpos<<1));
 			ntoin = 2;
 		} else {
 			inakey = nodebody[0];
-			inaval = bnode_write(sh, alloc, layer, nsplay,
+			inaval = bnode_write(sh, alloc, layer, nfanout,
 					nodebody);
 			ntoin = 1;
 		}
-	} while(layer++ != root_layer);
+	} while(layer++ != oldcursor->root_layer);
 	if(likely(ntoin == 1)) return inaval;
 	if(unlikely(layer == LAYER_MAX+1))
 		shash_error_toobig(sh, alloc->action);
@@ -2364,6 +2743,33 @@ static word THX_btree_set(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	return bnode_write(sh, alloc, layer, 2, nodebody);
 }
 
+#define btree_cursor_set(sh, alloc, ocs, repl, keypvl, valpvl) \
+	THX_btree_cursor_set(aTHX_ sh, alloc, ocs, repl, keypvl, valpvl)
+static word THX_btree_cursor_set(pTHX_ struct shash *sh,
+	struct shash_alloc *alloc, struct cursor *oldcursor,
+	bool replace, struct pvl keypvl, struct pvl valpvl)
+{
+	if(pvl_is_null(valpvl)) {
+		if(!replace)
+			return oldcursor->ent[oldcursor->root_layer].nodeptr;
+		return btree_cursor_modify(sh, alloc, oldcursor, 1,
+			NULL_PTR, NULL_PTR);
+	} else {
+		word keyptr;
+		if(replace) {
+			if(string_eq_pvl(sh, btree_cursor_get(sh, oldcursor),
+					valpvl))
+				return oldcursor->ent[oldcursor->root_layer]
+					.nodeptr;
+			keyptr = btree_cursor_key(sh, oldcursor);
+		} else {
+			keyptr = string_write_from_pvl(sh, alloc, keypvl);
+		}
+		return btree_cursor_modify(sh, alloc, oldcursor, replace,
+			keyptr, string_write_from_pvl(sh, alloc, valpvl));
+	}
+}
+
 #define btree_size_at_layer(sh, np, el) \
 	THX_btree_size_at_layer(aTHX_ sh, np, el)
 static word THX_btree_size_at_layer(pTHX_ struct shash *sh, word ptr,
@@ -2371,26 +2777,26 @@ static word THX_btree_size_at_layer(pTHX_ struct shash *sh, word ptr,
 static word THX_btree_size_at_layer(pTHX_ struct shash *sh, word ptr,
 	int expect_layer)
 {
-	int layer, splay, i;
-	word const *loc = bnode_check(sh, ptr, expect_layer, &layer, &splay);
+	int layer, fanout, i;
+	word const *loc = bnode_check(sh, ptr, expect_layer, &layer, &fanout);
 	word sz;
-	if(unlikely(splay == 0) && likely(layer == 0) &&
+	if(unlikely(fanout == 0) && likely(layer == 0) &&
 			likely(sh->sizes->dhd_zeropad_sz >= WORD_SZ))
 		return 0;
-	sz = WORD_SZ + (splay << (WORD_SZ_LOG2+1));
+	sz = WORD_SZ + (fanout << (WORD_SZ_LOG2+1));
 	loc = bnode_body_loc(loc);
 	if(likely(layer == 0)) {
-		for(i = splay << 1; i--; ) {
+		for(i = fanout << 1; i--; ) {
 			word asz = string_size(sh, *loc++);
 			sz += asz;
-			if(sz < asz) return ~(word)0;
+			if(unlikely(sz < asz)) return ~(word)0;
 		}
 	} else {
 		layer--;
-		for(i = splay; i--; ) {
+		for(i = fanout; i--; ) {
 			word asz = btree_size_at_layer(sh, loc[1], layer);
 			sz += asz;
-			if(sz < asz) return ~(word)0;
+			if(unlikely(sz < asz)) return ~(word)0;
 			loc += 2;
 		}
 	}
@@ -2403,7 +2809,7 @@ PERL_STATIC_INLINE word THX_btree_size(pTHX_ struct shash *sh, word root)
 	word sz = btree_size_at_layer(sh, root, -1);
 	if(!likely(sz)) return 0;
 	sz = LINE_ALIGN(sh->sizes, sz);
-	return sz ? sz : ~(word)0;
+	return likely(sz) ? sz : ~(word)0;
 }
 
 #define btree_migrate_at_layer(shf, ptrf, el, sht, alloct) \
@@ -2411,17 +2817,17 @@ PERL_STATIC_INLINE word THX_btree_size(pTHX_ struct shash *sh, word root)
 static word THX_btree_migrate_at_layer(pTHX_ struct shash *shf, word ptrf,
 	int expect_layer, struct shash *sht, struct shash_alloc *alloct)
 {
-	int layer, splay, i;
-	word nodebody[MAXSPLAY*2];
+	int layer, fanout, i;
+	word nodebody[MAXFANOUT*2];
 	word const *locf = bnode_body_loc(bnode_check(shf, ptrf, expect_layer,
-							&layer, &splay));
+							&layer, &fanout));
 	word *loct = nodebody;
 	if(likely(layer == 0)) {
-		for(i = splay << 1; i--; ) {
+		for(i = fanout << 1; i--; ) {
 			*loct++ = string_migrate(shf, *locf++, sht, alloct);
 		}
 	} else {
-		for(i = splay; i--; ) {
+		for(i = fanout; i--; ) {
 			word spc;
 			word ptrt = btree_migrate_at_layer(shf, locf[1],
 					layer-1, sht, alloct);
@@ -2431,7 +2837,7 @@ static word THX_btree_migrate_at_layer(pTHX_ struct shash *shf, word ptrf,
 			*loct++ = ptrt;
 		}
 	}
-	return bnode_write(sht, alloct, layer, splay, nodebody);
+	return bnode_write(sht, alloct, layer, fanout, nodebody);
 }
 
 #define btree_migrate(shf, ptrf, sht, act) \
@@ -2456,7 +2862,7 @@ PERL_STATIC_INLINE word THX_shash_root_for_read(pTHX_ struct shash *sh)
 		return sh->u.snapshot.root;
 	} else {
 		shash_ensure_data_file(sh);
-		return sync_read_word(&WORD_AT(sh->data_mmap,
+		return word_get(&WORD_AT(sh->data_mmap,
 					sh->sizes->dhd_current_root)) &
 			~PTR_FLAG_ROLLOVER;
 	}
@@ -2464,15 +2870,40 @@ PERL_STATIC_INLINE word THX_shash_root_for_read(pTHX_ struct shash *sh)
 
 /* mechanism for writing to shash */
 
-#define shash_initiate_rollover(sh) THX_shash_initiate_rollover(aTHX_ sh)
-PERL_STATIC_INLINE void THX_shash_initiate_rollover(pTHX_ struct shash *sh)
+PERL_STATIC_INLINE bool shash_change_root(struct shash *sh, word old, word new)
+{
+	tally_event(&sh->tally, K_ROOT_CHANGE_ATTEMPT);
+	if(likely(word_cset(
+			&WORD_AT(sh->data_mmap, sh->sizes->dhd_current_root),
+			old, new))) {
+		tally_event(&sh->tally, K_ROOT_CHANGE_SUCCESS);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+PERL_STATIC_INLINE bool shash_change_file(struct shash *sh, word old, word new)
+{
+	tally_event(&sh->tally, K_FILE_CHANGE_ATTEMPT);
+	if(likely(word_cset(&WORD_AT(sh->u.live.master_mmap,
+					sh->sizes->mfl_current_datafileid),
+				old, new))) {
+		tally_event(&sh->tally, K_FILE_CHANGE_SUCCESS);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+PERL_STATIC_INLINE void shash_initiate_rollover(struct shash *sh)
 {
 	word *root_p = &WORD_AT(sh->data_mmap, sh->sizes->dhd_current_root);
 	while(1) {
-		word root = sync_read_word(root_p);
+		word root = word_get(root_p);
 		if(unlikely(root & PTR_FLAG_ROLLOVER)) break;
-		if(likely(__sync_bool_compare_and_swap(root_p,
-				root, root | PTR_FLAG_ROLLOVER)))
+		if(likely(shash_change_root(sh, root,
+				root | PTR_FLAG_ROLLOVER)))
 			break;
 	}
 }
@@ -2493,7 +2924,7 @@ PERL_STATIC_INLINE word THX_shash_try_rollover(pTHX_ struct shash *sh,
 	struct shash new_sh;
 	SV *old_mmap_sv;
 	tmps_ix_t old_tmps_floor;
-	old_root_word = sync_read_word(&WORD_AT(sh->data_mmap,
+	old_root_word = word_get(&WORD_AT(sh->data_mmap,
 						sh->sizes->dhd_current_root));
 	old_root = old_root_word & ~PTR_FLAG_ROLLOVER;
 	new_sz = sh->sizes->dhd_sz + btree_size(sh, old_root);
@@ -2506,22 +2937,22 @@ PERL_STATIC_INLINE word THX_shash_try_rollover(pTHX_ struct shash *sh,
 	if(unlikely(!new_sz)) shash_error_toobig(sh, action);
 	if(unlikely((off_t)new_sz < 0 || (word)(off_t)new_sz != new_sz))
 		shash_error_errnum(sh, action, EFBIG);
+	tally_zero(&new_sh.tally);
 	new_sh.sizes = sh->sizes;
 	new_sh.parameter = sh->parameter;
 	new_sh.top_pathname_sv = sh->top_pathname_sv;
 	allocfileid_p = &WORD_AT(sh->u.live.master_mmap,
 					sh->sizes->mfl_lastalloc_datafileid);
 	do {
-		old_file_id = sync_read_word(allocfileid_p);
+		old_file_id = word_get(allocfileid_p);
 		new_file_id = old_file_id + 1;
 		if(unlikely(new_file_id == 0)) new_file_id = 1;
-	} while(!likely(__sync_bool_compare_and_swap(allocfileid_p,
-				old_file_id, new_file_id)));
-	if(unlikely(dirref_via_stat(sh->u.live.dir, MASTER_FILENAME, &statbuf)
+	} while(!likely(word_cset(allocfileid_p, old_file_id, new_file_id)));
+	if(unlikely(dirref_rel_stat(sh->u.live.dir, MASTER_FILENAME, &statbuf)
 			== -1))
 		shash_error_errno(sh, action);
 	dir_make_data_filename(filename, new_file_id);
-	new_fd = dirref_via_open_cloexec(sh->u.live.dir, filename,
+	new_fd = dirref_rel_open_cloexec(sh->u.live.dir, filename,
 			O_RDWR|O_CREAT|O_EXCL, 0);
 	if(unlikely(new_fd == -1)) shash_error_errno(sh, action);
 	new_ulr = unlinkfile_save(sh->u.live.dir, filename);
@@ -2548,8 +2979,8 @@ PERL_STATIC_INLINE word THX_shash_try_rollover(pTHX_ struct shash *sh,
 	old_tmps_floor = PL_tmps_floor;
 	SAVETMPS;
 	new_sh.data_mmap_sv = mmap_as_sv(new_fd, new_sz, 1);
-	if(!new_sh.data_mmap_sv) shash_error_errno(sh, action);
-	new_sh.data_mmap = mmap_addr_from_sv(new_sh.data_mmap_sv);
+	if(!likely(new_sh.data_mmap_sv)) shash_error_errno(sh, action);
+	new_sh.data_mmap = SvPVX(new_sh.data_mmap_sv);
 	new_sh.data_size = new_sz;
 	closefd_early(new_fdr);
 	WORD_AT(new_sh.data_mmap, DHD_MAGIC) = DATA_FILE_MAGIC;
@@ -2559,20 +2990,16 @@ PERL_STATIC_INLINE word THX_shash_try_rollover(pTHX_ struct shash *sh,
 		sh->sizes->dhd_sz;
 	WORD_AT(new_sh.data_mmap, sh->sizes->dhd_current_root) = new_root =
 		btree_migrate(sh, old_root, &new_sh, action);
+	tally_add(&sh->tally, &new_sh.tally);
 	old_file_id = sh->u.live.data_file_id;
 	if((!(old_root_word & PTR_FLAG_ROLLOVER) &&
-			!likely(__sync_bool_compare_and_swap(
-				&WORD_AT(sh->data_mmap,
-					sh->sizes->dhd_current_root),
-				old_root_word,
+			!likely(shash_change_root(sh, old_root_word,
 				old_root_word | PTR_FLAG_ROLLOVER))) ||
-			!likely(__sync_bool_compare_and_swap(
-				&WORD_AT(sh->u.live.master_mmap,
-					sh->sizes->mfl_current_datafileid),
+			!likely(shash_change_file(sh,
 				old_file_id, new_file_id))) {
-		unlinkfile_early(new_ulr);
 		FREETMPS;
 		PL_tmps_floor = old_tmps_floor;
+		shash_unlinkfile_early(sh, action, new_ulr);
 		return NULL_PTR;
 	}
 	unlinkfile_cancel(new_ulr);
@@ -2585,9 +3012,14 @@ PERL_STATIC_INLINE word THX_shash_try_rollover(pTHX_ struct shash *sh,
 	sh->u.live.data_file_id = new_file_id;
 	FREETMPS;
 	PL_tmps_floor = old_tmps_floor;
-	if(old_file_id != 0) {
+	if(likely(old_file_id != 0)) {
 		dir_make_data_filename(filename, old_file_id);
-		(void) dirref_via_unlink(sh->u.live.dir, filename);
+		if(unlikely(dirref_rel_unlink(sh->u.live.dir, filename)
+				== -1)) {
+			int e = errno;
+			if(!(likely(e == ENOENT) || likely(e == EBUSY)))
+				shash_error_errnum(sh, action, e);
+		}
 	}
 	return new_root;
 }
@@ -2615,7 +3047,7 @@ static void THX_shash_mutate(pTHX_ struct shash *sh, char const *action,
 		word old_root, new_root;
 		just_rolled_over = 0;
 		shash_ensure_data_file(sh);
-		old_root = sync_read_word(&WORD_AT(sh->data_mmap,
+		old_root = word_get(&WORD_AT(sh->data_mmap,
 						sh->sizes->dhd_current_root));
 		if(unlikely(old_root & PTR_FLAG_ROLLOVER)) {
 			old_root = shash_try_rollover(sh, action, addsz);
@@ -2626,12 +3058,11 @@ static void THX_shash_mutate(pTHX_ struct shash *sh, char const *action,
 		alloc.prealloc_len = 0;
 		new_root = THX_mutate(aTHX_ sh, &alloc, old_root, mutate_arg);
 		if(likely(new_root == old_root) ||
-				likely(__sync_bool_compare_and_swap(
-					&WORD_AT(sh->data_mmap,
-						sh->sizes->dhd_current_root),
+				likely(shash_change_root(sh,
 					old_root, new_root)))
 			break;
 	}
+	tally_event(&sh->tally, K_DATA_WRITE_OP);
 }
 
 /* shash opening and creation */
@@ -2692,10 +3123,11 @@ static void THX_shash_open_error_magic(pTHX_ struct shash *sh)
 	shash_error(sh, "open", "not a shared hash");
 }
 
-static void THX_shash_open_check_file(pTHX_ struct shash *sh, char const *fn,
-	word arg)
+static void THX_shash_open_check_file(pTHX_ struct shash *sh,
+	char const *action, char const *fn, word arg)
 {
 	word id;
+	PERL_UNUSED_ARG(action);
 	PERL_UNUSED_ARG(arg);
 	if(unlikely(dir_filename_class(fn, &id) == FILENAME_CLASS_BOGUS))
 		shash_open_error_magic(sh);
@@ -2704,10 +3136,11 @@ static void THX_shash_open_check_file(pTHX_ struct shash *sh, char const *fn,
 #define shash_open(psv, msv) THX_shash_open(aTHX_ psv, msv)
 static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 {
+	dMY_CXT;
 	char const *top_pathname_pv;
 	unsigned mode;
 	struct shash *sh;
-	SV *shsv, *shsvref, *mapsv;
+	SV *shsv, *shsvref, *mapsv, *sizes_sv;
 	dirref_t dir;
 	int master_fd;
 	struct stat statbuf;
@@ -2718,10 +3151,10 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 	shsv = newSV_type(SVt_PVMG);
 	shsvref = sv_2mortal(newRV_noinc(shsv));
 	Newxz(sh, 1, struct shash);
-	sh->u.live.dir = dirref_null();
 	SvPV_set(shsv, (char *)sh);
 	SvLEN_set(shsv, sizeof(struct shash));
-	(void) sv_bless(shsvref, shash_handle_stash);
+	shash_apply_magic(shsv);
+	(void) sv_bless(shsvref, MY_CXT.shash_handle_stash);
 	SvGETMAGIC(top_pathname_sv);
 	if(!likely(sv_is_string(top_pathname_sv)))
 		croak("filename is not a string");
@@ -2733,6 +3166,8 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 			SvUTF8_on(sh->top_pathname_sv);
 	}
 	mode = mode_from_sv(mode_sv);
+	if(likely(mode & (STOREMODE_WRITE|STOREMODE_CREATE)))
+		TAINT_PROPER("shash_open");
 	sh->mode = mode & (STOREMODE_READ|STOREMODE_WRITE);
 	top_pathname_pv = SvPV_nolen(sh->top_pathname_sv);
 	sh->u.live.dir = dir = dirref_open(top_pathname_pv, &statbuf);
@@ -2749,8 +3184,8 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 	if(!likely(S_ISDIR(statbuf.st_mode)))
 		shash_open_error_magic(sh);
 	dir_iterate(sh, "open", THX_shash_open_check_file, 0);
-	master_fd = dirref_via_open_cloexec(dir, MASTER_FILENAME,
-			(mode & STOREMODE_WRITE) ? O_RDWR : O_RDONLY, 0);
+	master_fd = dirref_rel_open_cloexec(dir, MASTER_FILENAME,
+			likely(mode & STOREMODE_WRITE) ? O_RDWR : O_RDONLY, 0);
 	if(likely(master_fd != -1)) {
 		opened_master:
 		fdr = closefd_save(master_fd);
@@ -2765,7 +3200,7 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 			shash_open_error_magic(sh);
 		mapsv = mmap_as_sv(master_fd, MFL_PARAM+WORD_SZ, 0);
 		if(!likely(mapsv)) shash_error_errno(sh, "open");
-		map = mmap_addr_from_sv(mapsv);
+		map = SvPVX(mapsv);
 		if(!likely(WORD_AT(map, MFL_MAGIC) == MASTER_FILE_MAGIC))
 			shash_open_error_magic(sh);
 		sh->parameter = WORD_AT(map, MFL_PARAM);
@@ -2774,8 +3209,12 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 			bad_parameter:
 			shash_error(sh, "open", "unsupported format");
 		}
-		sh->sizes = sizes_lookup(sh->parameter);
-		if(!likely(sh->sizes)) goto bad_parameter;
+		sizes_sv = sizes_lookup(sh->parameter);
+		if(!likely(sizes_sv)) goto bad_parameter;
+#if QWITH_DUP
+		sh->sizes_sv = sizes_sv;
+#endif /* QWITH_DUP */
+		sh->sizes = (struct sizes const *)SvPVX(sizes_sv);
 		mmap_early_unmap(mapsv);
 		if(!likely((word)statbuf.st_size == sh->sizes->mfl_sz))
 			shash_open_error_magic(sh);
@@ -2783,24 +3222,28 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 				!!(mode & STOREMODE_WRITE));
 		if(!likely(mapsv)) shash_error_errno(sh, "open");
 		sh->u.live.master_mmap_sv = SvREFCNT_inc_simple_NN(mapsv);
-		sh->u.live.master_mmap = mmap_addr_from_sv(mapsv);
+		sh->u.live.master_mmap = SvPVX(mapsv);
 		closefd_early(fdr);
-		if(mode & STOREMODE_WRITE)
+		if(likely(mode & STOREMODE_WRITE))
 			dir_clean(sh, "open",
-				sync_read_word(&WORD_AT(sh->u.live.master_mmap,
+				word_get(&WORD_AT(sh->u.live.master_mmap,
 					sh->sizes->mfl_current_datafileid)));
 		return shsvref;
 	}
 	if(!likely(errno == ENOENT && (mode & STOREMODE_CREATE)))
 		shash_error_errno(sh, "open");
 	sh->parameter = parameter_preferred();
-	sh->sizes = sizes_lookup(sh->parameter);
-	if(!likely(sh->sizes)) shash_error_errnum(sh, "open", ENOMEM);
+	sizes_sv = sizes_lookup(sh->parameter);
+	if(!likely(sizes_sv)) shash_error_errnum(sh, "open", ENOMEM);
+#if QWITH_DUP
+	sh->sizes_sv = sizes_sv;
+#endif /* QWITH_DUP */
+	sh->sizes = (struct sizes const *)SvPVX(sizes_sv);
 	if(unlikely((off_t)sh->sizes->mfl_sz < 0 ||
 			(word)(off_t)sh->sizes->mfl_sz != sh->sizes->mfl_sz))
 		shash_error_errnum(sh, "open", EFBIG);
 	dir_make_temp_filename(temp_filename);
-	master_fd = dirref_via_open_cloexec(dir, temp_filename,
+	master_fd = dirref_rel_open_cloexec(dir, temp_filename,
 			O_RDWR|O_CREAT|O_EXCL,
 			S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
 	if(unlikely(master_fd == -1)) shash_error_errno(sh, "open");
@@ -2811,24 +3254,24 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
 	mapsv = mmap_as_sv(master_fd, sh->sizes->mfl_sz, 1);
 	if(!likely(mapsv)) shash_error_errno(sh, "open");
 	sh->u.live.master_mmap_sv = SvREFCNT_inc_simple_NN(mapsv);
-	sh->u.live.master_mmap = map = mmap_addr_from_sv(mapsv);
+	sh->u.live.master_mmap = map = SvPVX(mapsv);
 	closefd_early(fdr);
 	WORD_AT(map, MFL_MAGIC) = MASTER_FILE_MAGIC;
 	WORD_AT(map, MFL_PARAM) = sh->parameter;
-	if(unlikely(dirref_via_link(dir, temp_filename, MASTER_FILENAME)
+	if(unlikely(dirref_rel_link(dir, temp_filename, MASTER_FILENAME)
 			== -1)) {
 		if(unlikely(errno != EEXIST))
 			shash_error_errno(sh, "open");
 		mmap_early_unmap(mapsv);
 		sh->u.live.master_mmap_sv = NULL;
 		SvREFCNT_dec_NN(mapsv);
-		unlinkfile_early(ulr);
-		master_fd = dirref_via_open_cloexec(dir, MASTER_FILENAME,
-			(mode & STOREMODE_WRITE) ? O_RDWR : O_RDONLY, 0);
+		shash_unlinkfile_early(sh, "open", ulr);
+		master_fd = dirref_rel_open_cloexec(dir, MASTER_FILENAME,
+			likely(mode & STOREMODE_WRITE) ? O_RDWR : O_RDONLY, 0);
 		if(unlikely(master_fd == -1)) shash_error_errno(sh, "open");
 		goto opened_master;
 	}
-	unlinkfile_early(ulr);
+	shash_unlinkfile_early(sh, "open", ulr);
 	dir_clean(sh, "open", 0);
 	return shsvref;
 }
@@ -2844,26 +3287,6 @@ static SV *THX_shash_open(pTHX_ SV *top_pathname_sv, SV *mode_sv)
  * which take a variable number of arguments delimited by a stack mark.
  * These pp1_ functions are the parts of the operations that are common
  * to ops and XS functions.
- *
- * FUTURE: should support atomic operations on a group of multiple
- * specific keys and on a lexicographical range of keys.  A group of
- * multiple keys is supplied as the keys of a hash.  It suffices for a
- * range to be specified by an inclusive lower bound and an exclusive
- * upper bound, with undef permitted to impose no bound; an exclusive
- * lower bound or inclusive upper bound can be arranged by the caller
- * appending "\0" to the key.  The same operations can be supported
- * that are supported on a single key, simply operating on all the keys
- * in parallel.  Additionally, a conditional set can be grouped, using a
- * single condition across all keys rather than a separate condition for
- * each key.  Other operations that can be performed on a group/range are
- * to check whether any keys exist (single truth-value result for whole
- * group/range), count extant keys, list extant keys in lexicographical
- * order, and find first/last extant key.
- *
- * FUTURE: group write operations should be implemented by btree
- * merging, rather than by repeated single-key modifications.  Group read
- * operations also could benefit from specific support.  It may make sense
- * to reformulate single-key operations as groups of unit cardinality.
  */
 
 #define pp1_is_shash() THX_pp1_is_shash(aTHX)
@@ -2899,14 +3322,14 @@ static void THX_pp1_shash_open(pTHX)
 static void THX_pp1_shash_is_readable(pTHX)
 {
 	dSP;
-	SETs(boolSV(shash_from_svref(TOPs)->mode & STOREMODE_READ));
+	SETs(boolSV(likely(shash_from_svref(TOPs)->mode & STOREMODE_READ)));
 }
 
 #define pp1_shash_is_writable() THX_pp1_shash_is_writable(aTHX)
 static void THX_pp1_shash_is_writable(pTHX)
 {
 	dSP;
-	SETs(boolSV(shash_from_svref(TOPs)->mode & STOREMODE_WRITE));
+	SETs(boolSV(likely(shash_from_svref(TOPs)->mode & STOREMODE_WRITE)));
 }
 
 #define pp1_shash_mode() THX_pp1_shash_mode(aTHX)
@@ -2921,6 +3344,7 @@ static void THX_pp1_shash_getd(pTHX)
 {
 	struct shash *sh;
 	struct pvl keypvl;
+	struct cursor cur;
 	SV *resultsv;
 	dSP;
 	SV *keysv = POPs;
@@ -2928,8 +3352,9 @@ static void THX_pp1_shash_getd(pTHX)
 	sh = shash_from_svref(TOPs);
 	keypvl = pvl_from_arg("key", 0, keysv);
 	shash_check_readable(sh, "read");
-	resultsv = boolSV(btree_get(sh, shash_root_for_read(sh), keypvl)
-				!= NULL_PTR);
+	resultsv =
+		boolSV(btree_seek(sh, &cur, shash_root_for_read(sh), keypvl));
+	tally_event(&sh->tally, K_DATA_READ_OP);
 	SPAGAIN;
 	SETs(resultsv);
 }
@@ -2939,7 +3364,7 @@ static void THX_pp1_shash_get(pTHX)
 {
 	struct shash *sh;
 	struct pvl keypvl;
-	word valptr;
+	struct cursor cur;
 	SV *valsv;
 	dSP;
 	SV *keysv = POPs;
@@ -2947,9 +3372,10 @@ static void THX_pp1_shash_get(pTHX)
 	sh = shash_from_svref(TOPs);
 	keypvl = pvl_from_arg("key", 0, keysv);
 	shash_check_readable(sh, "read");
-	valptr = btree_get(sh, shash_root_for_read(sh), keypvl);
-	valsv = valptr == NULL_PTR ? &PL_sv_undef :
-		string_as_sv(sh, "read", valptr);
+	valsv = btree_seek(sh, &cur, shash_root_for_read(sh), keypvl) ?
+		string_as_sv(sh, "read", btree_cursor_get(sh, &cur)) :
+		&PL_sv_undef;
+	tally_event(&sh->tally, K_DATA_READ_OP);
 	SPAGAIN;
 	SETs(valsv);
 }
@@ -2963,7 +3389,11 @@ static word THX_mutate_set(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	word oldroot, void *mutate_arg)
 {
 	struct mutateargs_set *args = (struct mutateargs_set *)mutate_arg;
-	return btree_set(sh, alloc, oldroot, args->keypvl, args->newvalpvl);
+	struct cursor oldcur;
+	bool match;
+	match = btree_seek(sh, &oldcur, oldroot, args->keypvl);
+	return btree_cursor_set(sh, alloc, &oldcur, match,
+		args->keypvl, args->newvalpvl);
 }
 
 #define pp1_shash_settish(au) THX_pp1_shash_settish(aTHX_ au)
@@ -3006,8 +3436,12 @@ static word THX_mutate_gset(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	word oldroot, void *mutate_arg)
 {
 	struct mutateargs_gset *args = (struct mutateargs_gset *)mutate_arg;
-	args->oldvalptr = btree_get(sh, oldroot, args->keypvl);
-	return btree_set(sh, alloc, oldroot, args->keypvl, args->newvalpvl);
+	struct cursor oldcur;
+	bool match;
+	match = btree_seek(sh, &oldcur, oldroot, args->keypvl);
+	args->oldvalptr = match ? btree_cursor_get(sh, &oldcur) : NULL_PTR;
+	return btree_cursor_set(sh, alloc, &oldcur, match,
+		args->keypvl, args->newvalpvl);
 }
 
 #define pp1_shash_gset() THX_pp1_shash_gset(aTHX)
@@ -3052,15 +3486,19 @@ static word THX_mutate_cset(pTHX_ struct shash *sh, struct shash_alloc *alloc,
 	word oldroot, void *mutate_arg)
 {
 	struct mutateargs_cset *args = (struct mutateargs_cset *)mutate_arg;
-	word oldvalptr = btree_get(sh, oldroot, args->keypvl);
-	if(!likely(pvl_is_null(args->chkvalpvl) ? oldvalptr == NULL_PTR :
-			oldvalptr != NULL_PTR &&
-			string_eq_pvl(sh, oldvalptr, args->chkvalpvl))) {
+	struct cursor oldcur;
+	bool match;
+	match = btree_seek(sh, &oldcur, oldroot, args->keypvl);
+	if(!likely(pvl_is_null(args->chkvalpvl) ? !match :
+			match && string_eq_pvl(sh,
+					btree_cursor_get(sh, &oldcur),
+					args->chkvalpvl))) {
 		args->result = 0;
 		return oldroot;
 	}
 	args->result = 1;
-	return btree_set(sh, alloc, oldroot, args->keypvl, args->newvalpvl);
+	return btree_cursor_set(sh, alloc, &oldcur, match,
+		args->keypvl, args->newvalpvl);
 }
 
 #define pp1_shash_cset() THX_pp1_shash_cset(aTHX)
@@ -3082,7 +3520,7 @@ static void THX_pp1_shash_cset(pTHX)
 	shash_check_writable(sh, "update");
 	shash_mutate(sh, "update", THX_mutate_cset, &args);
 	SPAGAIN;
-	SETs(boolSV(args.result));
+	SETs(boolSV(likely(args.result)));
 }
 
 #define pp1_shash_snapshot() THX_pp1_shash_snapshot(aTHX)
@@ -3095,6 +3533,7 @@ static void THX_pp1_shash_snapshot(pTHX)
 	if(unlikely(sh->mode & STOREMODE_SNAPSHOT)) {
 		snapshsvref = sv_2mortal(newRV_inc(SvRV(shsvref)));
 	} else {
+		dMY_CXT;
 		word root = shash_root_for_read(sh);
 		struct shash *snapsh;
 		SV *snapshsv;
@@ -3103,7 +3542,11 @@ static void THX_pp1_shash_snapshot(pTHX)
 		Newxz(snapsh, 1, struct shash);
 		SvPV_set(snapshsv, (char *)snapsh);
 		SvLEN_set(snapshsv, sizeof(struct shash));
-		(void) sv_bless(snapshsvref, shash_handle_stash);
+		shash_apply_magic(snapshsv);
+		(void) sv_bless(snapshsvref, MY_CXT.shash_handle_stash);
+#if QWITH_DUP
+		snapsh->sizes_sv = sh->sizes_sv;
+#endif /* QWITH_DUP */
 		snapsh->sizes = sh->sizes;
 		snapsh->parameter = sh->parameter;
 		snapsh->top_pathname_sv = SvREFCNT_inc_NN(sh->top_pathname_sv);
@@ -3124,6 +3567,22 @@ static void THX_pp1_shash_is_snapshot(pTHX)
 	SETs(boolSV(shash_from_svref(TOPs)->mode & STOREMODE_SNAPSHOT));
 }
 
+#define pp1_shash_idle() THX_pp1_shash_idle(aTHX)
+static void THX_pp1_shash_idle(pTHX)
+{
+	dSP;
+	struct shash *sh = shash_from_svref(POPs);
+	if(unlikely(GIMME_V == G_SCALAR)) PUSHs(&PL_sv_undef);
+	PUTBACK;
+	if(!unlikely(sh->mode & STOREMODE_SNAPSHOT)) {
+		SV *mapsv = sh->data_mmap_sv;
+		if(likely(mapsv)) {
+			sh->data_mmap_sv = NULL;
+			SvREFCNT_dec_NN(mapsv);
+		}
+	}
+}
+
 #define pp1_shash_tidy() THX_pp1_shash_tidy(aTHX)
 static void THX_pp1_shash_tidy(pTHX)
 {
@@ -3136,13 +3595,44 @@ static void THX_pp1_shash_tidy(pTHX)
 	for(tries = 3; tries--; ) {
 		shash_ensure_data_file(sh);
 		if(!likely(sh->u.live.data_file_id)) break;
-		if(likely(sync_read_word(&WORD_AT(sh->data_mmap,
+		if(likely(word_get(&WORD_AT(sh->data_mmap,
 					sh->sizes->dhd_nextalloc_space)) <
 					(sh->data_size >> 1)))
 			break;
-		if(likely(shash_try_rollover(sh, "tidy", 0) != NULL_PTR)) break;
+		if(likely(shash_try_rollover(sh, "tidy", 1<<20) != NULL_PTR))
+			break;
 	}
 	dir_clean(sh, "tidy", sh->u.live.data_file_id);
+}
+
+#define pp1_shash_tally_get() THX_pp1_shash_tally_get(aTHX)
+static void THX_pp1_shash_tally_get(pTHX)
+{
+	dSP;
+	struct shash *sh = shash_from_svref(TOPs);
+	PERL_UNUSED_VAR(sh);
+	SETs(tally_as_hvref(&sh->tally));
+}
+
+#define pp1_shash_tally_zero() THX_pp1_shash_tally_zero(aTHX)
+static void THX_pp1_shash_tally_zero(pTHX)
+{
+	dSP;
+	struct shash *sh = shash_from_svref(POPs);
+	if(unlikely(GIMME_V == G_SCALAR)) PUSHs(&PL_sv_undef);
+	PUTBACK;
+	PERL_UNUSED_VAR(sh);
+	tally_zero(&sh->tally);
+}
+
+#define pp1_shash_tally_gzero() THX_pp1_shash_tally_gzero(aTHX)
+static void THX_pp1_shash_tally_gzero(pTHX)
+{
+	dSP;
+	struct shash *sh = shash_from_svref(TOPs);
+	PERL_UNUSED_VAR(sh);
+	SETs(tally_as_hvref(&sh->tally));
+	tally_zero(&sh->tally);
 }
 
 /* API operations in pp form for ops */
@@ -3169,7 +3659,11 @@ HSM_MAKE_PP(shash_gset)
 HSM_MAKE_PP(shash_cset)
 HSM_MAKE_PP(shash_snapshot)
 HSM_MAKE_PP(shash_is_snapshot)
+HSM_MAKE_PP(shash_idle)
 HSM_MAKE_PP(shash_tidy)
+HSM_MAKE_PP(shash_tally_get)
+HSM_MAKE_PP(shash_tally_zero)
+HSM_MAKE_PP(shash_tally_gzero)
 
 #endif /* cv_set_call_checker */
 
@@ -3203,7 +3697,11 @@ HSM_MAKE_XSFUNC(shash_tied_delete, 2, "shash, key")
 HSM_MAKE_XSFUNC(shash_cset, 4, "shash, key, chkvalue, newvalue")
 HSM_MAKE_XSFUNC(shash_snapshot, 1, "shash")
 HSM_MAKE_XSFUNC(shash_is_snapshot, 1, "shash")
+HSM_MAKE_XSFUNC(shash_idle, 1, "shash")
 HSM_MAKE_XSFUNC(shash_tidy, 1, "shash")
+HSM_MAKE_XSFUNC(shash_tally_get, 1, "shash")
+HSM_MAKE_XSFUNC(shash_tally_zero, 1, "shash")
+HSM_MAKE_XSFUNC(shash_tally_gzero, 1, "shash")
 
 #ifndef PERL_ARGS_ASSERT_CROAK_XS_USAGE
 # undef croak_xs_usage
@@ -3230,10 +3728,10 @@ static OP *THX_ck_entersub_args_hsm(pTHX_ OP *entersubop, GV *namegv, SV *ckobj)
 	pushop->op_sibling = cvop;
 	lastargop->op_sibling = NULL;
 	op_free(entersubop);
-# ifdef XopENTRY_set
-	newop = newUNOP(OP_CUSTOM, 0, firstargop);
-# else /* !XopENTRY_set */
 	newop = newUNOP(OP_NULL, 0, firstargop);
+# ifdef XopENTRY_set
+	newop->op_type = OP_CUSTOM;
+# else /* !XopENTRY_set */
 	newop->op_type = OP_DOFILE;
 # endif /* !XopENTRY_set */
 	newop->op_ppaddr = DPTR2FPTR(Perl_ppaddr_t, CvXSUBANY(cv).any_ptr);
@@ -3249,14 +3747,32 @@ BOOT:
 {
 	dirref_ensure_strategy();
 	(void) newCONSTSUB(NULL, "Hash::SharedMem::shash_referential_handle",
-		boolSV(dirref_referential()));
+		boolSV(likely(dirref_referential())));
 }
 
 BOOT:
-	sizes_table = ptr_table_new();
+{
+	MY_CXT_INIT;
+	MY_CXT.sizes_table = newHV();
+	MY_CXT.shash_handle_stash = gv_stashpvs("Hash::SharedMem::Handle", 1);
+	tally_boot();
+}
 
-BOOT:
-	shash_handle_stash = gv_stashpvs("Hash::SharedMem::Handle", 1);
+#if QWITH_DUP
+
+void
+CLONE(...)
+CODE:
+	PERL_UNUSED_VAR(items);
+	{
+		MY_CXT_CLONE;
+		MY_CXT.sizes_table = newHV();
+		MY_CXT.shash_handle_stash =
+			gv_stashpvs("Hash::SharedMem::Handle", 1);
+		tally_boot();
+	}
+
+#endif /* QWITH_DUP */
 
 BOOT:
 {
@@ -3293,7 +3809,11 @@ BOOT:
 		HSM_FUNC_TO_INSTALL(shash_cset, 4),
 		HSM_FUNC_TO_INSTALL(shash_snapshot, 1),
 		HSM_FUNC_TO_INSTALL(shash_is_snapshot, 1),
+		HSM_FUNC_TO_INSTALL(shash_idle, 1),
 		HSM_FUNC_TO_INSTALL(shash_tidy, 1),
+		HSM_FUNC_TO_INSTALL(shash_tally_get, 1),
+		HSM_FUNC_TO_INSTALL(shash_tally_zero, 1),
+		HSM_FUNC_TO_INSTALL(shash_tally_gzero, 1),
 	}, *fti;
 	int i;
 	for(i = C_ARRAY_LENGTH(funcs_to_install); i--; ) {
@@ -3326,20 +3846,13 @@ MODULE = Hash::SharedMem PACKAGE = Hash::SharedMem::Handle
 
 PROTOTYPES: DISABLE
 
-void
-DESTROY(SV *shash)
-PREINIT:
-	struct shash *sh;
+SV *
+referential_handle(SV *classname)
 CODE:
-	sh = shash_from_svref(shash);
-	if(!(sh->mode & STOREMODE_SNAPSHOT)) {
-		if(likely(sh->u.live.master_mmap_sv))
-			SvREFCNT_dec_NN(sh->u.live.master_mmap_sv);
-		if(likely(!dirref_is_null(sh->u.live.dir)))
-			dirref_close(sh->u.live.dir);
-	}
-	if(likely(sh->top_pathname_sv)) SvREFCNT_dec_NN(sh->top_pathname_sv);
-	if(likely(sh->data_mmap_sv)) SvREFCNT_dec_NN(sh->data_mmap_sv);
+	PERL_UNUSED_VAR(classname);
+	RETVAL = boolSV(likely(dirref_referential()));
+OUTPUT:
+	RETVAL
 
 SV *
 open(SV *classname, SV *filename, SV *mode)

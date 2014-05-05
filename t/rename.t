@@ -4,7 +4,7 @@ use strict;
 use Errno 1.00 qw(EIO);
 use File::Temp 0.22 qw(tempdir);
 use POSIX qw(strerror);
-use Test::More tests => 41;
+use Test::More tests => 44;
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	shash_referential_handle is_shash shash_open shash_set shash_get
@@ -16,6 +16,11 @@ is shash_referential_handle(), !!shash_referential_handle;
 is &shash_referential_handle(), !!shash_referential_handle;
 is_deeply [shash_referential_handle()], [!!shash_referential_handle];
 is_deeply [&shash_referential_handle()], [!!shash_referential_handle];
+
+require_ok "Hash::SharedMem::Handle";
+is "Hash::SharedMem::Handle"->referential_handle, shash_referential_handle;
+is_deeply ["Hash::SharedMem::Handle"->referential_handle],
+	[shash_referential_handle];
 
 my $tmpdir = tempdir(CLEANUP => 1);
 

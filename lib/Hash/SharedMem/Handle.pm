@@ -6,6 +6,8 @@ Hash::SharedMem::Handle - handle for efficient shared mutable hash
 
 	use Hash::SharedMem::Handle;
 
+	if(Hash::SharedMem::Handle->referential_handle) { ...
+
 	$shash = Hash::SharedMem::Handle->open($filename, "rwc");
 
 	if($shash->is_readable) { ...
@@ -21,7 +23,12 @@ Hash::SharedMem::Handle - handle for efficient shared mutable hash
 	$snap_shash = $shash->snapshot;
 	if($shash->is_snapshot) { ...
 
+	$shash->idle;
 	$shash->tidy;
+
+	$tally = $shash->tally_get;
+	$shash->tally_zero;
+	$tally = $shash->tally_gzero;
 
 	tie %shash, "Hash::SharedMem::Handle", $shash;
 	tie %shash, "Hash::SharedMem::Handle", $filename, "rwc";
@@ -61,7 +68,20 @@ use strict;
 
 use Hash::SharedMem ();
 
-our $VERSION = "0.002";
+our $VERSION = "0.003";
+
+=head1 CLASS METHODS
+
+=over
+
+=item Hash::SharedMem::Handle->referential_handle
+
+Returns a truth value indicating whether each shared hash handle
+contains a first-class reference to the shared hash to which it refers.
+See L<Hash::SharedMem/"Filesystem referential integrity"> for discussion
+of the significance of this.
+
+=back
 
 =head1 CONSTRUCTOR
 
@@ -99,7 +119,15 @@ See L<Hash::SharedMem/shash_open> for details.
 
 =item $shash->is_snapshot
 
+=item $shash->idle
+
 =item $shash->tidy
+
+=item $shash->tally_get
+
+=item $shash->tally_zero
+
+=item $shash->tally_gzero
 
 These methods are each equivalent to the corresponding
 "C<shash_>"-prefixed function in L<Hash::SharedMem>.  See that document

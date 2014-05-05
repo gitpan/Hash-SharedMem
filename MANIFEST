@@ -11,6 +11,7 @@ lib/Hash/SharedMem.pm
 lib/Hash/SharedMem.xs
 lib/Hash/SharedMem/Handle.pm
 lib/Hash/features.probe
+magic
 t/arg_error.t
 t/bad_dir.t
 t/bad_master.t
@@ -19,6 +20,7 @@ t/concurrent.t
 t/deparse.t
 t/empty.t
 t/filename.t
+t/fork.t
 t/function.t
 t/get_string.t
 t/huge.t
@@ -34,6 +36,9 @@ t/pod_cvg.t
 t/pod_syn.t
 t/rename.t
 t/snapshot.t
+t/taint.t
+t/tally.t
+t/threads.t
 t/tidy.t
 t/tie.t
 SIGNATURE    Added here by Module::Build

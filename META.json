@@ -24,7 +24,8 @@
             "Module::Build" : "0",
             "POSIX" : "0",
             "Scalar::String" : "0",
-            "Test::More" : "0",
+            "Test::Builder" : "0.03",
+            "Test::More" : "0.40",
             "if" : "0",
             "perl" : "5.006",
             "strict" : "0",
@@ -57,11 +58,11 @@
    "provides" : {
       "Hash::SharedMem" : {
          "file" : "lib/Hash/SharedMem.pm",
-         "version" : "0.002"
+         "version" : "0.003"
       },
       "Hash::SharedMem::Handle" : {
          "file" : "lib/Hash/SharedMem/Handle.pm",
-         "version" : "0.002"
+         "version" : "0.003"
       }
    },
    "release_status" : "stable",
@@ -70,5 +71,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.002"
+   "version" : "0.003"
 }

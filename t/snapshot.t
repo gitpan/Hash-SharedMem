@@ -8,6 +8,7 @@ BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash shash_open
 	shash_get shash_set
 	shash_snapshot shash_is_snapshot
+	shash_idle
 ); }
 
 my $tmpdir = tempdir(CLEANUP => 1);
@@ -64,6 +65,9 @@ is shash_get($s2, "a"), "aa";
 is shash_get($s2, "b"), "bb";
 is shash_get($s2, "c"), "cc";
 is shash_get($s2, "d"), undef;
+
+shash_idle($s0);
+shash_idle($s1);
 
 my $s3 = shash_snapshot($s1);
 ok $s3;

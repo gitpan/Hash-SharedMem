@@ -3,7 +3,7 @@ use strict;
 
 use File::Temp 0.22 qw(tempdir);
 use Scalar::String 0.000 qw(sclstr_downgraded sclstr_upgraded);
-use Test::More tests => 446;
+use Test::More tests => 526;
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash check_shash
@@ -11,6 +11,8 @@ BEGIN { use_ok "Hash::SharedMem", qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
+	shash_idle shash_tidy
+	shash_tally_get shash_tally_zero shash_tally_gzero
 ); }
 
 foreach(
@@ -53,6 +55,16 @@ foreach(
 	eval { shash_snapshot($_) };
 	like $@, qr/\Ahandle is not a shared hash handle /;
 	eval { shash_is_snapshot($_) };
+	like $@, qr/\Ahandle is not a shared hash handle /;
+	eval { shash_idle($_) };
+	like $@, qr/\Ahandle is not a shared hash handle /;
+	eval { shash_tidy($_) };
+	like $@, qr/\Ahandle is not a shared hash handle /;
+	eval { shash_tally_get($_) };
+	like $@, qr/\Ahandle is not a shared hash handle /;
+	eval { shash_tally_zero($_) };
+	like $@, qr/\Ahandle is not a shared hash handle /;
+	eval { shash_tally_gzero($_) };
 	like $@, qr/\Ahandle is not a shared hash handle /;
 }
 

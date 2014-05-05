@@ -2,7 +2,7 @@ use warnings;
 use strict;
 
 use File::Temp 0.22 qw(tempdir);
-use Test::More tests => 200;
+use Test::More tests => 218;
 
 BEGIN { use_ok "Hash::SharedMem::Handle"; }
 BEGIN { use_ok "Hash::SharedMem", qw(is_shash); }
@@ -228,9 +228,40 @@ is $sh->get("a115"), undef;
 is_deeply [$sh->cset("a115", undef, undef)], [!!1];
 is $sh->get("a115"), undef;
 
+$sh->idle;
+is scalar($sh->idle), undef;
+is_deeply [$sh->idle], [];
+
 $sh->tidy;
 is scalar($sh->tidy), undef;
 is_deeply [$sh->tidy], [];
+
+my $h;
+$sh->tally_get;
+$h = $sh->tally_get;
+is ref($h), "HASH";
+ok !grep { !/\A[a-z_]+\z/ } keys %$h;
+ok !grep { !/\A(?:0|[1-9][0-9]*)\z/ } values %$h;
+$h = [$sh->tally_get];
+is @$h, 1;
+is ref($h->[0]), "HASH";
+ok !grep { !/\A[a-z_]+\z/ } keys %{$h->[0]};
+ok !grep { !/\A(?:0|[1-9][0-9]*)\z/ } values %{$h->[0]};
+
+$sh->tally_zero;
+is scalar($sh->tally_zero), undef;
+is_deeply [$sh->tally_zero], [];
+
+$sh->tally_gzero;
+$h = $sh->tally_gzero;
+is ref($h), "HASH";
+ok !grep { !/\A[a-z_]+\z/ } keys %$h;
+ok !grep { !/\A(?:0|[1-9][0-9]*)\z/ } values %$h;
+$h = [$sh->tally_gzero];
+is @$h, 1;
+is ref($h->[0]), "HASH";
+ok !grep { !/\A[a-z_]+\z/ } keys %{$h->[0]};
+ok !grep { !/\A(?:0|[1-9][0-9]*)\z/ } values %{$h->[0]};
 
 my $nx = Hash::SharedMem::Handle->open("$tmpdir/t1", "c");
 ok $nx;

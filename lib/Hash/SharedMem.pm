@@ -39,9 +39,18 @@ Hash::SharedMem - efficient shared mutable hash
 	$snap_shash = shash_snapshot($shash);
 	if(shash_is_snapshot($shash)) { ...
 
-	use Hash::SharedMem qw(shash_tidy);
+	use Hash::SharedMem qw(shash_idle shash_tidy);
 
+	shash_idle($shash);
 	shash_tidy($shash);
+
+	use Hash::SharedMem qw(
+		shash_tally_get shash_tally_zero shash_tally_gzero
+	);
+
+	$tally = shash_tally_get($shash);
+	shash_tally_zero($shash);
+	$tally = shash_tally_gzero($shash);
 
 =head1 DESCRIPTION
 
@@ -56,6 +65,15 @@ memory space, which for interprocess communication amounts to the
 processes sharing memory.  Processes are never blocked waiting for each
 other.  The use of files means that there is some persistence, with the
 data continuing to exist when there are no processes with it mapped.
+
+The data structure is optimised for the case where all the data fits
+into RAM.  This happens either via buffering of a disk-based filesystem,
+or as the normal operation of a memory-backed filesystem, in either case
+as long as there isn't much swapping activity.  If RAM isn't large enough,
+such that the data has to reside mainly on disk and parts of it have to
+be frequently reread from disk, speed will seriously suffer.  The data
+structure exhibits poor locality of reference, and is not designed to
+play nicely with filesystem block sizes.
 
 =head2 Consistency and synchronisation
 
@@ -243,6 +261,60 @@ to chain a new program with L<execve(2)>, to terminate with L<_exit(2)>,
 or generally to make use of the C library before doing either of those.
 Attempting to run Perl code would be unwise.
 
+On platforms lacking a native L<fork(2)>, the Perl function
+L<fork|perlfunc/fork> actually creates a Perl L<thread|threads>.  In that
+case the behaviour should be similar to that seen with a real L<fork(2)>,
+as described in the next section.
+
+=head2 Threads
+
+This module can be used in multiple Perl L<threads> simultaneously.
+The module may be loaded by multiple threads separately, or from
+Perl 5.8.9 onwards may be loaded by a thread that spawns new threads.
+(Prior to Perl 5.8.9, limitations of the threading system mean that
+module data can't be correctly cloned upon thread spawning.  Any but
+the most trivial cases of thread spawning with this module loaded will
+crash the interpreter.  The rest of this section only applies to Perls
+that fully support cloning.)
+
+If a thread is spawned while the parent thread has an open shared hash
+handle, the handle is duplicated, so that both resulting threads have
+handles referring to the same underlying shared hash.  Provided that the
+duplication did not happen during a shared hash operation, both threads'
+handles will subsequently work normally, and can be used independently.
+
+=head2 Tainting
+
+If L<taint mode|perlsec/"Taint mode"> is enabled, taintedness is relevant
+to some operations on shared hashes.  Shared hash handles mostly behave
+like regular file handles for tainting purposes.  Where the following
+description says that a result is "not tainted", that means it does
+not get the taint flag set merely by virtue of the operation performed;
+it may still be marked as tainted if other tainted data is part of the
+same expression, due to Perl's conservative taint tracking.
+
+The classification functions are happy to operate on tainted arguments.
+Their results are not tainted.
+
+When opening a shared hash, if the shared hash filename or the mode
+string is tainted then it is not permitted to open for writing or with
+the possibility of creating.  It is permitted to open non-creatingly for
+reading regardless of taint status.  Of course, any kind of opening is
+permitted in an untainted expression.
+
+A shared hash handle per se is never tainted.
+
+The results of the mode checking functions are not tainted.
+
+It is permitted to write tainted data to a shared hash.  The data
+operations all accept tainted arguments.  When reading from a shared hash,
+the value referenced by any key existing in the hash is always tainted,
+but an absent value is treated as clean.  So where a data operation
+returns a value from the shared hash, the value will be tainted if it is
+a string, but C<undef> representing an absent value will not be tainted.
+The truth values returned by some operations are not tainted, even if
+they are derived entirely from tainted data.
+
 =cut
 
 package Hash::SharedMem;
@@ -251,7 +323,7 @@ package Hash::SharedMem;
 use warnings;
 use strict;
 
-our $VERSION = "0.002";
+our $VERSION = "0.003";
 
 use parent "Exporter";
 our @EXPORT_OK = qw(
@@ -261,7 +333,8 @@ our @EXPORT_OK = qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
-	shash_tidy
+	shash_idle shash_tidy
+	shash_tally_get shash_tally_zero shash_tally_gzero
 );
 
 eval { local $SIG{__DIE__};
@@ -282,10 +355,13 @@ sub _deparse_shash_unop {
 		"(".join(", ", map { $self->deparse($_, 6) } @k).")";
 }
 
-foreach my $name (@EXPORT_OK) {
-	no strict "refs";
-	*{"B::Deparse::pp_$name"} =
-		sub { _deparse_shash_unop($_[0], $_[1], $name) };
+if("$]" >= 5.013007) {
+	foreach my $name (@EXPORT_OK) {
+		next if $name eq "shash_referential_handle";
+		no strict "refs";
+		*{"B::Deparse::pp_$name"} =
+			sub { _deparse_shash_unop($_[0], $_[1], $name) };
+	}
 }
 
 =head1 CONSTANTS
@@ -330,9 +406,19 @@ Returns normally if it is, or C<die>s if it is not.
 
 Opens and return a handle referring to a shared hash object, or C<die>s
 if the shared hash can't be opened as specified.  I<FILENAME> must
-refer to the directory that encapsulates the shared hash.  I<MODE> is
-a string controlling how the shared hash will be used.  It can contain
-these characters:
+refer to the directory that encapsulates the shared hash.
+
+If the filename string contains non-ASCII characters, then the filename
+actually used consists of the octets of the internal encoding of the
+string, which does not necessarily match the ostensible characters of the
+string.  This gives inconsistent behaviour for the same character sequence
+represented in the two different ways that Perl uses internally.  This is
+consistent with the treatment of filenames in Perl's built-in operators
+such as L<open|perlfunc/open>; see L<perlunicode/"When Unicode Does
+Not Happen">.  This may change in future versions of Perl (beyond 5.20).
+
+I<MODE> is a string controlling how the shared hash will be used.
+It can contain these characters:
 
 =over
 
@@ -498,6 +584,32 @@ Returns a truth value indicating whether this handle refers to a snapshot
 
 =over
 
+=item shash_idle(SHASH)
+
+Puts the shared hash handle into a state where it occupies less
+resources, at the expense of making the next operation through the
+handle more expensive.  This doesn't change the visible behaviour of the
+handle, and doesn't affect the state of the shared hash itself at all.
+The invisible operations performed by this function may vary between
+versions of this module.
+
+This function should be called when the handle is going to be unused for
+a lengthy period.  For example, if a long-running daemon uses a shared
+hash in brief bursts once an hour, it should idle its handle at the end
+of each burst of activity.
+
+Currently the effect of this operation is to discard the handle's
+memory mapping of the shared hash data file.  The next operation has to
+reestablish the mapping.  The benefit of discarding the mapping is that
+periodically the data file has to be replaced with a new one, but the
+old data file continues to exist as long as some process has it mapped.
+A process that is actively using the shared hash will quickly notice that
+the data file has been replaced and will unmap the old one.  A process
+with a handle that it's not using, however, could keep the old data
+file in existence, occupying storage, long after it has no further use.
+A handle that has been put into the idle state won't perpetuate the
+existence of an obsolete data file.
+
 =item shash_tidy(SHASH)
 
 Rearranges the storage of the shared hash if it seems useful to do
@@ -521,6 +633,105 @@ work and incur the cost.  The shared hash will still work properly in
 that case, but the unlucky writer will experience a disproportionately
 large delay in the completion of its write operation.  This could well
 be a problem if the shared hash is large.
+
+=back
+
+=head2 Event counters
+
+=over
+
+=item shash_tally_get(SHASH)
+
+Returns a reference to a hash of counts of events that have occurred with
+this shared hash handle.  These counts may be of interest for profiling
+and debugging purposes, but should not be relied upon for semantic
+purposes.  The event types may vary between versions of this module.
+Few of the event types make sense in terms of the API supplied by this
+module: most of them are internal implementation details.
+
+Events are counted separately for each handle.  The events counted are
+associated specifically with the handle, rather than with the shared hash
+as a whole.  Generally, an idle handle will accumulate no events, even
+if the shared hash to which it refers is active.  The event counters
+start at zero when a handle is opened, and can be reset to zero by
+L</shash_tally_zero> or L</shash_tally_gzero>.
+
+In the returned hash, each key identifies a type of event, and the
+corresponding value is (unless wrapped) the number of times events of that
+type have occurred on the handle since the counters were last zeroed.
+Currently the event counters are held in fixed-size variables and can
+wrap, so if event counts might get as high as 2^64 then they can't be
+relied upon to be accurate.  Wrapping will not occur at less than 2^64;
+in other respects, wrapping behaviour may change in the future.
+
+The event types that are currently counted are:
+
+=over
+
+=item B<string_read>
+
+Parse an octet string representation in a shared hash data file.
+
+=item B<string_write>
+
+Write an octet string representation into a shared hash data file.
+
+=item B<bnode_read>
+
+Parse a B-tree node representation in a shared hash data file.
+
+=item B<bnode_write>
+
+Write a B-tree node representation into a shared hash data file.
+
+=item B<key_compare>
+
+Compare two strings as shared hash keys.
+
+=item B<root_change_attempt>
+
+Attempt to replace the root pointer in a shared hash data file.  This may
+be done to change the content of the shared hash, or as part of the
+process of switching to a new data file.
+
+=item B<root_change_success>
+
+Succeed in replacing the root pointer in a shared hash data file.
+An attempt will fail if another process changed the root pointer during
+the operation that required this process to change the root pointer.
+
+=item B<file_change_attempt>
+
+Attempt to replace the data file in a shared hash.  This is necessary
+from time to time as data files fill up.
+
+=item B<file_change_success>
+
+Succeed in replacing the data file in a shared hash.  An attempt will
+fail if another process replaced the data file while this process was
+initialising its new one.
+
+=item B<data_read_op>
+
+Perform a high-level data operation that purely reads from the shared
+hash: L</shash_getd> or L</shash_get>.
+
+=item B<data_write_op>
+
+Perform a high-level data operation that writes, or at least may write,
+to the shared hash: L</shash_set>, L</shash_gset>, or L</shash_cset>.
+
+=back
+
+=item shash_tally_zero(SHASH)
+
+Zero the event counters that can be read by L</shash_tally_get>.
+
+=item shash_tally_gzero(SHASH)
+
+Zero the event counters that can be read by L</shash_tally_get>, and
+return the values the event counters previously had, in the same form
+as L</shash_tally_get>.  This swap is performed atomically.
 
 =back
 

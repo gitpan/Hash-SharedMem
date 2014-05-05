@@ -4,7 +4,7 @@ use strict;
 use Errno 1.00 qw(ENOENT EEXIST);
 use File::Temp 0.22 qw(tempdir);
 use POSIX qw(strerror);
-use Test::More tests => 1155;
+use Test::More tests => 1379;
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash
@@ -12,7 +12,8 @@ BEGIN { use_ok "Hash::SharedMem", qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
-	shash_tidy
+	shash_idle shash_tidy
+	shash_tally_get shash_tally_zero shash_tally_gzero
 ); }
 require_ok "Hash::SharedMem::Handle";
 
@@ -99,6 +100,8 @@ sub test_shash_ops($$$) {
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}
+	eval { shash_idle($sh) };
+	is $@, "";
 	eval { shash_tidy($sh) };
 	if($iomode =~ /w/) {
 		is $@, "";
@@ -107,6 +110,15 @@ sub test_shash_ops($$$) {
 				\ shared\ hash\ was\ opened
 				\ in\ unwritable\ mode\ #x;
 	}
+	$v = eval { shash_tally_get($sh) };
+	is $@, "";
+	is ref($v), "HASH";
+	$v = eval { shash_tally_zero($sh) };
+	is $@, "";
+	is $v, undef;
+	$v = eval { shash_tally_gzero($sh) };
+	is $@, "";
+	is ref($v), "HASH";
 	my %sh;
 	tie %sh, "Hash::SharedMem::Handle", $sh;
 	ok is_shash(tied(%sh));
@@ -195,9 +207,20 @@ sub test_shash_ops($$$) {
 				\ shared\ hash\ was\ opened
 				\ in\ unreadable\ mode\ #x;
 	}
+	eval { shash_idle($sh) };
+	is $@, "";
 	eval { shash_tidy($sh) };
 	like $@, qr#\Acan't\ tidy\ shared\ hash\ \Q$name\E:
 			\ shared\ hash\ handle\ is\ a\ snapshot\ #x;
+	$v = eval { shash_tally_get($sh) };
+	is $@, "";
+	is ref($v), "HASH";
+	$v = eval { shash_tally_zero($sh) };
+	is $@, "";
+	is $v, undef;
+	$v = eval { shash_tally_gzero($sh) };
+	is $@, "";
+	is ref($v), "HASH";
 	tie %sh, "Hash::SharedMem::Handle", $sh;
 	ok is_shash(tied(%sh));
 	ok tied(%sh) == $sh;

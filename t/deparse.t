@@ -12,7 +12,7 @@ BEGIN {
 	}
 }
 
-BEGIN { plan tests => 14; }
+BEGIN { plan tests => 19; }
 
 BEGIN { use_ok "Hash::SharedMem", qw(
 	is_shash check_shash
@@ -20,6 +20,8 @@ BEGIN { use_ok "Hash::SharedMem", qw(
 	shash_is_readable shash_is_writable shash_mode
 	shash_getd shash_get shash_set shash_gset shash_cset
 	shash_snapshot shash_is_snapshot
+	shash_idle shash_tidy
+	shash_tally_get shash_tally_zero shash_tally_gzero
 ); }
 
 my $deparse = B::Deparse->new;
@@ -61,5 +63,15 @@ depok sub { shash_snapshot($a0) },
 	"{Hash::SharedMem::shash_snapshot(\$a0);}";
 depok sub { shash_is_snapshot($a0) },
 	"{Hash::SharedMem::shash_is_snapshot(\$a0);}";
+depok sub { shash_idle($a0) },
+	"{Hash::SharedMem::shash_idle(\$a0);}";
+depok sub { shash_tidy($a0) },
+	"{Hash::SharedMem::shash_tidy(\$a0);}";
+depok sub { shash_tally_get($a0) },
+	"{Hash::SharedMem::shash_tally_get(\$a0);}";
+depok sub { shash_tally_zero($a0) },
+	"{Hash::SharedMem::shash_tally_zero(\$a0);}";
+depok sub { shash_tally_gzero($a0) },
+	"{Hash::SharedMem::shash_tally_gzero(\$a0);}";
 
 1;

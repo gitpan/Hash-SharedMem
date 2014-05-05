@@ -139,24 +139,24 @@ A string in the data file cannot contain anything that's not an octet
 A collection of keys and values is represented as a btree (actually a
 B+-tree), in which the keys are sorted lexicographically.  The maximum
 number of entries in a btree node is a parameter to the design, called
-MAXSPLAY, on which all users of a shash must agree.  It must be odd,
+MAXFANOUT, on which all users of a shash must agree.  It must be odd,
 and between 3 and 255 inclusive.  (Lower limit is inherent in btree
 structure; upper limit is to fit in a byte.)  A suggested value for
 it is 15.  Each btree node except for the root node contains between
-(MAXSPLAY+1)/2 and MAXSPLAY (inclusive) entries.  The root node contains
-between 2 and MAXSPLAY (inclusive) entries if there is at least one
-layer of btree nodes below it, or between 0 and MAXSPLAY (inclusive)
-entries if its entries are individual key/value pairs.  A btree node
-begins with a word header, in which bits are allocated thus:
+(MAXFANOUT+1)/2 and MAXFANOUT (inclusive) entries.  The root node
+contains between 2 and MAXFANOUT (inclusive) entries if there is at
+least one layer of btree nodes below it, or between 0 and MAXFANOUT
+(inclusive) entries if its entries are individual key/value pairs.
+A btree node begins with a word header, in which bits are allocated thus:
 
 	0-5   layer (0 = pointing directly to key/value pairs)
 	6-7   zero padding
-	8-15  splay (range 0 to MAXSPLAY inclusive)
+	8-15  fanout (range 0 to MAXFANOUT inclusive)
 	16-63 zero padding
 
 (Note: six bits for the layer number is enough to accommodate the maximum
 possible number of addressable nodes in a btree with the minimum possible
-splay.  Trees in practice are unlikely to get anywhere near this height.)
+fanout.  Trees in practice are unlikely to get anywhere near this height.)
 
 The node header is immediately followed by an array of entries, as
 many as indicated by the header.  Each entry consists of two words.
@@ -184,8 +184,14 @@ allocated thus:
 
 	0-7   log2(line/byte)
 	8-15  log2(page/byte)
-	16-23 MAXSPLAY
+	16-23 MAXFANOUT
 	24-63 zero padding
+
+If, in the future, there is any change in the file formats, it should be
+indicated by setting bits in what is currently zero padding.  This might
+be formulated as setting bit flags, or as changing a version number.
+ext2's concept of readonly-compatible changes may be useful, but
+comprehensibility of a shash to old code is not generally a priority.
 
 A data file begins with this header:
 

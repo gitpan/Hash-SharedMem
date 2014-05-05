@@ -50,6 +50,12 @@ sub {
 		extern int HLBNzorFAJMYbPEjiEKkMFBaKqZMkqq(void);
 		return HLBNzorFAJMYbPEjiEKkMFBaKqZMkqq() + 1;
 	}, {}) and die "probe system failed: non-existent function usable";
+	$compile_ok->($builder, ["sys/mman.h"], q{
+		int res;
+		res = mmap(NULL, 4096, PROT_READ, MAP_SHARED, 3, 0)
+			== (void*)-1;
+		return res;
+	}, {}) or die "OS unsupported: mmap(2) not available";
 	$defs{QHAVE_GETPAGESIZE} = $compile_ok->($builder, [], q{
 		int res;
 		res = getpagesize();
@@ -87,27 +93,42 @@ sub {
 		res = gettimeofday(&tv, NULL);
 		return res;
 	}, {});
-	$defs{QHAVE_OPENAT} = $compile_ok->($builder, [], q{
-		int res;
-		res = openat(0, ".", 0, 0);
-		return res;
-	}, {});
-	$defs{QHAVE_FSTATAT} = $compile_ok->($builder, [], q{
-		struct stat st;
-		int res;
-		res = fstatat(0, ".", &st, 0);
-		return res;
-	}, {});
-	$defs{QHAVE_LINKAT} = $compile_ok->($builder, [], q{
-		int res;
-		res = linkat(0, ".", 0, ".", 0);
-		return res;
-	}, {});
-	$defs{QHAVE_UNLINKAT} = $compile_ok->($builder, [], q{
-		int res;
-		res = unlinkat(0, ".", 0);
-		return res;
-	}, {});
+	# Cygwin declares openat(2) et al functions, and they
+	# superficially appear to work, but they're frauds.  They don't
+	# actually use a reference to the directory, as a fd would appear
+	# to supply.  Instead the directory fd encapsulates the absolute
+	# pathname under which the directory was opened, and openat(2)
+	# et al use the saved pathname.  They therefore fail if the
+	# directory is renamed.
+	# <http://www.cygwin.com/ml/cygwin-developers/2008-04/msg00108.html>
+	# We therefore reject Cygwin's versions of these functions,
+	# in favour of our own fakery that we don't mistake for the
+	# real thing.
+	$defs{QHAVE_OPENAT} = $^O eq "cygwin" ? 0 :
+		$compile_ok->($builder, [], q{
+			int res;
+			res = openat(0, ".", 0, 0);
+			return res;
+		}, {});
+	$defs{QHAVE_FSTATAT} = $^O eq "cygwin" ? 0 :
+		$compile_ok->($builder, [], q{
+			struct stat st;
+			int res;
+			res = fstatat(0, ".", &st, 0);
+			return res;
+		}, {});
+	$defs{QHAVE_LINKAT} = $^O eq "cygwin" ? 0 :
+		$compile_ok->($builder, [], q{
+			int res;
+			res = linkat(0, ".", 0, ".", 0);
+			return res;
+		}, {});
+	$defs{QHAVE_UNLINKAT} = $^O eq "cygwin" ? 0 :
+		$compile_ok->($builder, [], q{
+			int res;
+			res = unlinkat(0, ".", 0);
+			return res;
+		}, {});
 	$defs{QHAVE_FDOPENDIR} = $compile_ok->($builder, [], q{
 		DIR *dirh;
 		dirh = fdopendir(0);

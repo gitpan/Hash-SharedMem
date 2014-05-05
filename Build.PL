@@ -52,6 +52,7 @@ Module::Build->subclass(code => q{
 			$args{defines} = {
 				%{$args{defines} || {}},
 				%{$probed->{defs}},
+				QWITH_TALLY => 1,
 			};
 			$obj_file = $self->cbuilder->object_file($file);
 			unless($self->up_to_date($probed_file, $obj_file)) {
@@ -111,7 +112,8 @@ Module::Build->subclass(code => q{
 		"Module::Build" => 0,
 		"POSIX" => 0,
 		"Scalar::String" => 0,
-		"Test::More" => 0,
+		"Test::Builder" => "0.03",
+		"Test::More" => "0.40",
 		"if" => 0,
 		"perl" => "5.006",
 		"strict" => 0,

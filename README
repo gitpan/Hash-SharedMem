@@ -16,6 +16,15 @@ processes sharing memory.  Processes are never blocked waiting for each
 other.  The use of files means that there is some persistence, with the
 data continuing to exist when there are no processes with it mapped.
 
+The data structure is optimised for the case where all the data fits
+into RAM.  This happens either via buffering of a disk-based filesystem,
+or as the normal operation of a memory-backed filesystem, in either case
+as long as there isn't much swapping activity.  If RAM isn't large enough,
+such that the data has to reside mainly on disk and parts of it have to
+be frequently reread from disk, speed will seriously suffer.  The data
+structure exhibits poor locality of reference, and is not designed to
+play nicely with filesystem block sizes.
+
 INSTALLATION
 
 	perl Build.PL
